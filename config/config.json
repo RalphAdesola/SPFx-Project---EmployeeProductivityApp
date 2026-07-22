@@ -1,0 +1,18 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/config.2.0.schema.json",
+  "version": "2.0",
+  "bundles": {
+    "employee-productivity-app-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/employeeProductivityApp/EmployeeProductivityAppWebPart.js",
+          "manifest": "./src/webparts/employeeProductivityApp/EmployeeProductivityAppWebPart.manifest.json"
+        }
+      ]
+    }
+  },
+  "externals": {},
+  "localizedResources": {
+    "EmployeeProductivityAppWebPartStrings": "lib/webparts/employeeProductivityApp/loc/{locale}.js"
+  }
+}

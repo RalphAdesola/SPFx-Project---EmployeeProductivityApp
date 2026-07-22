@@ -1,0 +1,19 @@
+{
+  "@microsoft/generator-sharepoint": {
+    "useGulp": false,
+    "plusBeta": false,
+    "isCreatingSolution": true,
+    "nodeVersion": "22.14.0",
+    "sdksVersions": {},
+    "version": "1.23.0",
+    "libraryName": "employee-productivity-app",
+    "libraryId": "4cf56e9c-a8b7-4338-accb-ade626a118ca",
+    "environment": "spo",
+    "packageManager": "npm",
+    "solutionName": "EmployeeProductivityApp",
+    "solutionShortDescription": "EmployeeProductivityApp description",
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "componentType": "webpart"
+  }
+}

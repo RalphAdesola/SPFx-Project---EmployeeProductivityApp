@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "employee-productivity-app-client-side-solution",
+    "id": "4cf56e9c-a8b7-4338-accb-ade626a118ca",
+    "version": "1.0.0.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "developer": {
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.23.0"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "EmployeeProductivityApp description"
+      },
+      "longDescription": {
+        "default": "EmployeeProductivityApp description"
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "employee-productivity-app Feature",
+        "description": "The feature that activates elements of the employee-productivity-app solution.",
+        "id": "5660d2df-815d-4bcf-8f2d-88c091949cfb",
+        "version": "1.0.0.0"
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/employee-productivity-app.sppkg"
+  }
+}
