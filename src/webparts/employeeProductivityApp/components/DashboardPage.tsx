@@ -21,28 +21,18 @@ import {
 } from '@fluentui/react-components';
 import {
   AddRegular,
-  BoxRegular,
   ChevronDoubleLeftRegular,
   ChevronDoubleRightRegular,
   ClockRegular,
   CopyRegular,
+  DeleteRegular,
   EyeRegular,
-  FilterRegular,
   HeartRegular,
+  HeartFilled,
   HomeRegular,
-  LightbulbRegular,
-  MegaphoneRegular,
-  CodeRegular,
   PersonRegular,
   SearchRegular,
   SettingsRegular,
-  StarRegular,
-  TagRegular,
-  BoardRegular,
-  HistoryRegular,
-  LayerRegular,
-  SparkleRegular,
-  MoreHorizontalRegular,
   CheckmarkCircleRegular,
   SignOutRegular
 } from '@fluentui/react-icons';
@@ -52,6 +42,7 @@ import type {
   IDashboardMetric,
   IDepartmentSummary,
   ICategorySummary,
+  IPersonalPromptInsights,
   IPromptDetails,
   IPromptFilters,
   IPromptSummary,
@@ -67,6 +58,9 @@ export interface IDashboardPageProps {
   models: IAiModelSummary[];
   tags: ITagSummary[];
   prompts: IPromptSummary[];
+  favoritePromptIds: number[];
+  myPrompts: IPromptSummary[];
+  personalInsights: IPersonalPromptInsights;
   searchTerm: string;
   onSearchTermChange: (value: string) => void;
   onBackToLanding: () => void;
@@ -74,13 +68,15 @@ export interface IDashboardPageProps {
   loadError?: string | null;
   onRefresh?: () => void;
   onFiltersChange: (filters: IPromptFilters) => void;
-  onCreatePrompt: (payload: IPromptWritePayload, file?: File) => Promise<void>;
-  onUpdatePrompt: (id: number, payload: IPromptWritePayload, file?: File) => Promise<void>;
+  onCreatePrompt: (payload: IPromptWritePayload) => Promise<void>;
+  onUpdatePrompt: (id: number, payload: IPromptWritePayload) => Promise<void>;
   onViewPrompt: (id: number) => Promise<IPromptDetails | null>;
   onDeletePrompt: (id: number) => Promise<void>;
   onCopyPrompt: (id: number) => Promise<string>;
-  onSubmitRating: (id: number, rating: number) => Promise<void>;
+  onSetPromptFavorite: (id: number, title: string, isFavorite: boolean) => Promise<void>;
   onNavigateToAdmin: () => void;
+  onNavigateToPromptAssistant: () => void;
+  initialNavItem?: string;
   canAccessAdmin: boolean;
 }
 
@@ -92,18 +88,52 @@ const useStyles = makeStyles({
 
 const navigationItems = [
   { key: 'dashboard', label: 'Dashboard', icon: <HomeRegular /> },
+  { key: 'prompt-assistant', label: 'Prompt Assistant', icon: <AddRegular /> },
   { key: 'my-prompts', label: 'My Prompts', icon: <PersonRegular /> },
-  { key: 'shared-library', label: 'Shared Prompt Library', icon: <BoardRegular /> },
-  { key: 'categories', label: 'Categories', icon: <LayerRegular /> },
   { key: 'favorites', label: 'Favorites', icon: <HeartRegular /> },
-  { key: 'recent', label: 'Recently Used', icon: <HistoryRegular /> },
-  { key: 'models', label: 'AI Models', icon: <CodeRegular /> },
-  { key: 'tags', label: 'Tags', icon: <TagRegular /> },
-  { key: 'settings', label: 'Settings', icon: <SettingsRegular /> }
+  { key: 'logout', label: 'Log Out', icon: <SignOutRegular /> }
 ];
 
 const visibilityOptions = ['Organization', 'Department', 'Private'];
 const statusOptions: Array<'Published' | 'Draft'> = ['Published', 'Draft'];
+const formatDate = (value: string): string => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  const day = date.getDate() < 10 ? `0${date.getDate()}` : String(date.getDate());
+  const monthNumber = date.getMonth() + 1;
+  const month = monthNumber < 10 ? `0${monthNumber}` : String(monthNumber);
+  return `${day}-${month}-${date.getFullYear()}`;
+};
+
+const copyTextToClipboard = async (value: string): Promise<void> => {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall through to the browser-compatible copy mechanism.
+    }
+  }
+
+  const textArea = document.createElement('textarea');
+  textArea.value = value;
+  textArea.setAttribute('readonly', '');
+  textArea.style.position = 'fixed';
+  textArea.style.opacity = '0';
+  document.body.appendChild(textArea);
+  textArea.select();
+
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textArea);
+
+  if (!copied) {
+    throw new Error('Your browser blocked clipboard access. Copy the prompt text manually.');
+  }
+};
+
 const emptyPromptForm: IPromptWritePayload = {
   title: '',
   category: '',
@@ -121,7 +151,7 @@ const emptyPromptForm: IPromptWritePayload = {
 export default function DashboardPage(props: IDashboardPageProps): React.ReactElement {
   const pageStyles = useStyles();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
-  const [activeNavItem, setActiveNavItem] = React.useState('dashboard');
+  const [activeNavItem, setActiveNavItem] = React.useState(props.initialNavItem || 'dashboard');
   const [localSearch, setLocalSearch] = React.useState(props.searchTerm);
   const [selectedCategory, setSelectedCategory] = React.useState<string | undefined>(undefined);
   const [selectedModel, setSelectedModel] = React.useState<string | undefined>(undefined);
@@ -131,7 +161,6 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
   const [promptForm, setPromptForm] = React.useState<IPromptWritePayload>(emptyPromptForm);
   const [editingPromptId, setEditingPromptId] = React.useState<number | undefined>(undefined);
   const [selectedPrompt, setSelectedPrompt] = React.useState<IPromptDetails | null>(null);
-  const [attachmentFile, setAttachmentFile] = React.useState<File | undefined>(undefined);
   const [isSaving, setIsSaving] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionMessage, setActionMessage] = React.useState<string | null>(null);
@@ -141,8 +170,19 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
   const departmentOptions = props.departments.map((department) => department.title);
   const tagOptions = props.tags.map((tag) => tag.title);
   const visibleNavigationItems = props.canAccessAdmin
-    ? [...navigationItems, { key: 'admin', label: 'Administration', icon: <SparkleRegular /> }]
+    ? [...navigationItems, { key: 'admin', label: 'Administration', icon: <SettingsRegular /> }]
     : navigationItems;
+  const isMyPromptsView = activeNavItem === 'my-prompts';
+  const isFavoritesView = activeNavItem === 'favorites';
+  const displayedPrompts = isFavoritesView
+    ? props.prompts.filter((prompt) => props.favoritePromptIds.indexOf(Number(prompt.id)) >= 0)
+    : isMyPromptsView ? props.myPrompts : props.prompts;
+
+  React.useEffect(() => {
+    if (props.initialNavItem) {
+      setActiveNavItem(props.initialNavItem);
+    }
+  }, [props.initialNavItem]);
 
   React.useEffect(() => {
     props.onSearchTermChange(localSearch);
@@ -163,7 +203,6 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
   const resetPromptForm = (): void => {
     setPromptForm(emptyPromptForm);
     setEditingPromptId(undefined);
-    setAttachmentFile(undefined);
     setActionError(null);
     setActionMessage(null);
   };
@@ -182,16 +221,16 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
     try {
       const payload = buildPayload(status);
 
-      if (!payload.title.trim() || !payload.category || !payload.aiModel || !payload.promptText.trim()) {
-        setActionError('Title, Category, AI Model, and Prompt Text are required.');
+      if (!payload.title.trim() || !payload.category || !payload.promptText.trim()) {
+        setActionError('Title, Category, and Prompt Text are required.');
         return;
       }
 
       if (editingPromptId) {
-        await props.onUpdatePrompt(editingPromptId, payload, attachmentFile);
+        await props.onUpdatePrompt(editingPromptId, payload);
         setActionMessage('Prompt updated successfully.');
       } else {
-        await props.onCreatePrompt(payload, attachmentFile);
+        await props.onCreatePrompt(payload);
         setActionMessage(status === 'Published' ? 'Prompt published successfully.' : 'Draft saved successfully.');
       }
 
@@ -236,7 +275,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
       status: prompt.status,
       documentUrl: prompt.documentUrl || ''
     });
-    setSelectedPrompt(prompt);
+    setSelectedPrompt(null);
     setActionMessage('Editing latest SharePoint prompt record.');
   };
 
@@ -244,13 +283,24 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
     setActionError(null);
 
     try {
-      const promptText = await props.onCopyPrompt(Number(promptId));
+      const prompt = selectedPrompt?.id === promptId ? selectedPrompt : undefined;
 
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(promptText);
+      if (prompt?.promptText) {
+        await copyTextToClipboard(prompt.promptText);
+        setActionMessage('Prompt copied to your clipboard.');
+
+        try {
+          await props.onCopyPrompt(Number(promptId));
+          setActionMessage('Prompt copied to your clipboard and usage logged.');
+        } catch {
+          setActionMessage('Prompt copied to your clipboard. Usage could not be logged.');
+        }
+        return;
       }
 
-      setActionMessage('Prompt copied and usage logged.');
+      const promptText = await props.onCopyPrompt(Number(promptId));
+      await copyTextToClipboard(promptText);
+      setActionMessage('Prompt copied to your clipboard and usage logged.');
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to copy the prompt.');
     }
@@ -265,6 +315,18 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
       setActionMessage('Prompt deleted from active library.');
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to delete the prompt.');
+    }
+  };
+
+  const toggleFavorite = async (prompt: IPromptSummary): Promise<void> => {
+    setActionError(null);
+
+    try {
+      const isFavorite = props.favoritePromptIds.indexOf(Number(prompt.id)) >= 0;
+      await props.onSetPromptFavorite(Number(prompt.id), prompt.title, !isFavorite);
+      setActionMessage(isFavorite ? 'Prompt removed from favorites.' : 'Prompt added to favorites.');
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to update favorites.');
     }
   };
 
@@ -299,6 +361,12 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                 if (item.key === 'admin') {
                   props.onNavigateToAdmin();
                 }
+                if (item.key === 'prompt-assistant') {
+                  props.onNavigateToPromptAssistant();
+                }
+                if (item.key === 'logout') {
+                  props.onBackToLanding();
+                }
               }}
               aria-current={activeNavItem === item.key ? 'page' : undefined}
             >
@@ -308,44 +376,13 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
           ))}
         </nav>
 
-        <div className={styles.sidebarFooter}>
-          {!sidebarCollapsed ? (
-            <div className={styles.sidebarFooterStack}>
-              <Card className={styles.sidebarFooterCard}>
-                <Body2>SharePoint-ready architecture</Body2>
-                <Caption1>Built for curated prompts, governance, and collaboration.</Caption1>
-              </Card>
-              <Button
-                appearance="subtle"
-                className={`${styles.sidebarNavItem} ${styles.logoutNavItem}`}
-                onClick={props.onBackToLanding}
-                icon={<SignOutRegular />}
-              >
-                <span>Log Out</span>
-              </Button>
-            </div>
-          ) : (
-            <div className={styles.sidebarFooterCompactStack}>
-              <div className={styles.sidebarFooterCompact}>
-                <SparkleRegular />
-              </div>
-              <Button
-                appearance="subtle"
-                className={`${styles.sidebarNavItem} ${styles.logoutNavItem} ${styles.logoutNavItemCompact}`}
-                onClick={props.onBackToLanding}
-                icon={<SignOutRegular />}
-                aria-label="Log out"
-              />
-            </div>
-          )}
-        </div>
       </aside>
 
       <div className={styles.dashboardMain}>
         <header className={styles.topHeader}>
           <div className={styles.topHeaderLeft}>
-            <Title1 className={styles.pageTitle}>Dashboard</Title1>
-            <Caption1>Welcome back, {props.displayName || 'colleague'}</Caption1>
+            <Title1 className={styles.pageTitle}>{isFavoritesView ? 'Favorites' : isMyPromptsView ? 'My Prompts' : 'Prompt Library'}</Title1>
+            <Caption1>{isFavoritesView ? 'Prompts you saved for quick access.' : isMyPromptsView ? 'Manage prompts you created and review their performance.' : 'Browse and reuse prompts curated across the organization.'}</Caption1>
           </div>
 
           <div className={styles.topHeaderActions}>
@@ -358,8 +395,6 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
               />
             </div>
 
-            <Button appearance="subtle" icon={<FilterRegular />}>Filter</Button>
-            <Button appearance="subtle" icon={<MoreHorizontalRegular />}>Notifications</Button>
             <Avatar name={props.displayName} />
             <Button appearance="primary" icon={<AddRegular />} onClick={resetPromptForm}>Add Prompt</Button>
           </div>
@@ -386,15 +421,23 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
               </Card>
             )}
 
-            <section className={styles.summaryGrid}>
-              {props.metrics.map((metric) => (
-                <Card key={metric.label} className={styles.metricCard}>
-                  <CardHeader header={<Body2>{metric.label}</Body2>} />
-                  <Title2>{metric.value}</Title2>
-                  <Caption1>{metric.detail}</Caption1>
-                </Card>
-              ))}
-            </section>
+            {isMyPromptsView && (
+              <>
+                <section className={styles.summaryGrid}>
+                  {props.metrics.map((metric) => (
+                    <Card key={metric.label} className={styles.metricCard}>
+                      <CardHeader header={<Body2>{metric.label}</Body2>} />
+                      <Title2>{metric.value}</Title2>
+                      <Caption1>{metric.detail}</Caption1>
+                    </Card>
+                  ))}
+                </section>
+                <section className={styles.personalInsights} aria-label="My prompt highlights">
+                  <div><Caption1 className={styles.personalInsightLabel}>Most used:</Caption1><Body2>{props.personalInsights.mostUsed}</Body2></div>
+                  <div><Caption1 className={styles.personalInsightLabel}>Recently added:</Caption1><Body2>{props.personalInsights.recentlyAdded}</Body2></div>
+                </section>
+              </>
+            )}
 
             <section className={styles.controlsBar}>
               <div className={styles.filterField}>
@@ -412,38 +455,6 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                       <Option key={option} value={option}>
                         {option}
                       </Option>
-                    ))}
-                  </Dropdown>
-                </Field>
-              </div>
-
-              <div className={styles.filterField}>
-                <Field label="AI Model">
-                  <Dropdown
-                    className={styles.whiteDropdown}
-                    placeholder="All models"
-                    value={selectedModel || ''}
-                    selectedOptions={selectedModel ? [selectedModel] : []}
-                    onOptionSelect={(_, data) => setSelectedModel(data.optionValue ?? undefined)}
-                  >
-                    {modelOptions.map((option) => (
-                      <Option key={option} value={option}>{option}</Option>
-                    ))}
-                  </Dropdown>
-                </Field>
-              </div>
-
-              <div className={styles.filterField}>
-                <Field label="Status">
-                  <Dropdown
-                    className={styles.whiteDropdown}
-                    placeholder="Published / Draft"
-                    value={selectedStatus || ''}
-                    selectedOptions={selectedStatus ? [selectedStatus] : []}
-                    onOptionSelect={(_, data) => setSelectedStatus((data.optionValue as 'Published' | 'Draft') || undefined)}
-                  >
-                    {statusOptions.map((option) => (
-                      <Option key={option} value={option}>{option}</Option>
                     ))}
                   </Dropdown>
                 </Field>
@@ -507,13 +518,13 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
             )}
 
             <section className={styles.promptGrid}>
-              {props.prompts.length === 0 ? (
+              {displayedPrompts.length === 0 ? (
                 <Card className={styles.emptyStateCard}>
                   <Body1>No prompts match your current filters.</Body1>
                   <Caption1>Try a different search term, category, or model.</Caption1>
                 </Card>
               ) : (
-                props.prompts.map((prompt) => (
+                displayedPrompts.map((prompt) => (
                   <Card key={prompt.id} className={styles.promptCard}>
                     <div className={styles.promptCardTop}>
                       <div>
@@ -530,27 +541,22 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                         </div>
                         <Caption1>{prompt.category} · {prompt.createdBy}</Caption1>
                       </div>
-                      <Button appearance="subtle" icon={<EyeRegular />} onClick={() => viewPrompt(prompt.id)}>View Details</Button>
+                      <Button
+                        appearance="subtle"
+                        icon={props.favoritePromptIds.indexOf(Number(prompt.id)) >= 0 ? <HeartFilled /> : <HeartRegular />}
+                        aria-label={props.favoritePromptIds.indexOf(Number(prompt.id)) >= 0 ? 'Remove from favorites' : 'Add to favorites'}
+                        onClick={() => toggleFavorite(prompt)}
+                      />
                     </div>
 
                     <Body2 className={styles.promptDescription}>{prompt.description}</Body2>
 
                     <div className={styles.promptMetaGrid}>
                       <div className={styles.promptMetaItem}>
-                        <Caption1>AI Model</Caption1>
-                        <Text>{prompt.aiModel}</Text>
+                        <Text>Owner Department: {prompt.department || 'Not specified'}</Text>
                       </div>
                       <div className={styles.promptMetaItem}>
-                        <Caption1>Created Date</Caption1>
-                        <Text>{prompt.createdDate}</Text>
-                      </div>
-                      <div className={styles.promptMetaItem}>
-                        <Caption1>Average Rating</Caption1>
-                        <Text>{prompt.averageRating.toFixed(1)} / 5</Text>
-                      </div>
-                      <div className={styles.promptMetaItem}>
-                        <Caption1>Usage Count</Caption1>
-                        <Text>{prompt.usageCount}</Text>
+                        <Text>Created Date: {formatDate(prompt.createdDate)}</Text>
                       </div>
                     </div>
 
@@ -563,12 +569,12 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                     <div className={styles.promptCardFooter}>
                       <div className={styles.promptFooterLeft}>
                         <Caption1>Author: {prompt.createdBy}</Caption1>
-                        <Caption1><ClockRegular /> {prompt.createdDate}</Caption1>
+                        <Caption1><ClockRegular /> {formatDate(prompt.createdDate)}</Caption1>
                       </div>
                       <div className={styles.promptFooterActions}>
                         <Button appearance="secondary" icon={<CopyRegular />} onClick={() => copyPrompt(prompt.id)}>Copy Prompt</Button>
-                        <Button appearance="secondary" onClick={() => editPrompt(prompt.id)}>Edit</Button>
-                        <Button appearance="secondary" onClick={() => deletePrompt(prompt.id)}>Delete</Button>
+                        {isMyPromptsView && <Button appearance="secondary" onClick={() => editPrompt(prompt.id)}>Edit</Button>}
+                        {isMyPromptsView && <Button appearance="secondary" icon={<DeleteRegular />} onClick={() => deletePrompt(prompt.id)}>Delete</Button>}
                         <Button appearance="primary" icon={<EyeRegular />} onClick={() => viewPrompt(prompt.id)}>View Details</Button>
                       </div>
                     </div>
@@ -604,10 +610,10 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                   </Dropdown>
                 </Field>
 
-                <Field label="AI Model">
+                <Field label="Recommended AI Tool (optional)" hint="Suggest a tool when it is especially effective for this prompt.">
                   <Dropdown
                     className={styles.whiteDropdown}
-                    placeholder="Select model"
+                    placeholder="Select a recommended tool"
                     value={promptForm.aiModel}
                     selectedOptions={promptForm.aiModel ? [promptForm.aiModel] : []}
                     onOptionSelect={(_, data) => updatePromptForm('aiModel', data.optionValue || '')}
@@ -627,13 +633,23 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                 </Field>
 
                 <Field label="Tags">
-                  <Input className={styles.whiteInput} value={promptForm.tags.join(', ')} onChange={(_, data) => updatePromptForm('tags', data.value.split(','))} placeholder="comma-separated tags" />
-                </Field>
-
-                <Field label="Department">
                   <Dropdown
                     className={styles.whiteDropdown}
-                    placeholder="Select department"
+                    multiselect
+                    placeholder="Select tags"
+                    selectedOptions={promptForm.tags}
+                    onOptionSelect={(_, data) => updatePromptForm('tags', data.selectedOptions)}
+                  >
+                    {tagOptions.map((option) => (
+                      <Option key={option} value={option}>{option}</Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+
+                <Field label="Owner Department">
+                  <Dropdown
+                    className={styles.whiteDropdown}
+                    placeholder="Select owner department"
                     value={promptForm.department || ''}
                     selectedOptions={promptForm.department ? [promptForm.department] : []}
                     onOptionSelect={(_, data) => updatePromptForm('department', data.optionValue || '')}
@@ -658,14 +674,6 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                   </Dropdown>
                 </Field>
 
-                <Field label="Prompt Asset">
-                  <input
-                    className={styles.nativeFileInput}
-                    type="file"
-                    onChange={(event) => setAttachmentFile(event.currentTarget.files?.[0])}
-                  />
-                </Field>
-
                 <Button
                   appearance={promptForm.featured ? 'primary' : 'secondary'}
                   onClick={() => updatePromptForm('featured', !promptForm.featured)}
@@ -677,53 +685,56 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
               <Divider />
 
               <div className={styles.formActions}>
-                <Button appearance="primary" icon={<CheckmarkCircleRegular />} disabled={isSaving} onClick={() => savePrompt('Published')}>Publish</Button>
-                <Button appearance="secondary" disabled={isSaving} onClick={() => savePrompt('Draft')}>Save Draft</Button>
+                <Button appearance="primary" icon={<CheckmarkCircleRegular />} disabled={isSaving} onClick={() => savePrompt(editingPromptId ? promptForm.status : 'Published')}>
+                  {editingPromptId ? 'Save Edit' : 'Publish'}
+                </Button>
+                {!editingPromptId && <Button appearance="secondary" disabled={isSaving} onClick={() => savePrompt('Draft')}>Save Draft</Button>}
                 <Button appearance="subtle" disabled={isSaving} onClick={resetPromptForm}>Cancel</Button>
               </div>
             </Card>
 
             {selectedPrompt && (
-              <Card className={styles.sidePanelCard}>
-                <CardHeader
-                  header={<Body1 style={{ fontWeight: 600 }}>{selectedPrompt.title}</Body1>}
-                  description={`${selectedPrompt.category} · ${selectedPrompt.aiModel}`}
-                />
-
-                <div className={styles.formStack}>
-                  <Body2>{selectedPrompt.description}</Body2>
-                  <Textarea className={styles.whiteTextarea} value={selectedPrompt.promptText} resize="vertical" readOnly />
-                  <Caption1>Author: {selectedPrompt.createdBy}</Caption1>
-                  <Caption1>Modified: {selectedPrompt.modifiedDate}</Caption1>
-                  <div className={styles.formActions}>
-                    {[1, 2, 3, 4, 5].map((rating) => (
-                      <Button key={rating} appearance="secondary" icon={<StarRegular />} onClick={() => props.onSubmitRating(Number(selectedPrompt.id), rating)}>
-                        {rating}
-                      </Button>
-                    ))}
-                  </div>
-                  <div className={styles.formActions}>
-                    <Button appearance="secondary" onClick={() => editPrompt(selectedPrompt.id)}>Edit</Button>
-                    <Button appearance="secondary" onClick={() => copyPrompt(selectedPrompt.id)}>Copy</Button>
+              <div className={styles.promptPreviewOverlay} role="presentation" onMouseDown={() => setSelectedPrompt(null)}>
+                <section
+                  className={styles.promptPreviewDialog}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="prompt-preview-title"
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  <div className={styles.promptPreviewHeader}>
+                    <Title2 id="prompt-preview-title">{selectedPrompt.title}</Title2>
                     <Button appearance="subtle" onClick={() => setSelectedPrompt(null)}>Close</Button>
                   </div>
-                </div>
-              </Card>
+                  <div className={styles.promptPreviewContent}>
+                    <div className={styles.promptPreviewBadges}>
+                      <Badge appearance={selectedPrompt.status === 'Published' ? 'filled' : 'outline'}>{selectedPrompt.status}</Badge>
+                      {selectedPrompt.featured && <Badge appearance="filled" color="brand">Featured</Badge>}
+                      {selectedPrompt.tags.map((tag) => <Badge key={tag} appearance="outline">{tag}</Badge>)}
+                    </div>
+                    <Body2>{selectedPrompt.description}</Body2>
+                    <div className={styles.promptPreviewMetaGrid}>
+                      <Text>Category: {selectedPrompt.category}</Text>
+                      <Text>Owner Department: {selectedPrompt.department || 'Not specified'}</Text>
+                      <Text>Recommended AI Tool: {selectedPrompt.aiModel || 'Not specified'}</Text>
+                      <Text>Visibility: {selectedPrompt.visibility || 'Organization'}</Text>
+                      <Text>Author: {selectedPrompt.createdBy}</Text>
+                      <Text>Created: {formatDate(selectedPrompt.createdDate)}</Text>
+                      <Text>Last modified: {formatDate(selectedPrompt.modifiedDate)}</Text>
+                    </div>
+                    <div>
+                      <Caption1>Prompt text</Caption1>
+                      <Textarea className={`${styles.whiteTextarea} ${styles.promptPreviewTextarea}`} value={selectedPrompt.promptText} resize="vertical" readOnly />
+                    </div>
+                    {selectedPrompt.documentUrl && <Caption1>Sample asset: {selectedPrompt.documentUrl}</Caption1>}
+                  </div>
+                  <div className={styles.promptPreviewActions}>
+                    <Button appearance="secondary" onClick={() => copyPrompt(selectedPrompt.id)}>Copy Prompt</Button>
+                  </div>
+                </section>
+              </div>
             )}
 
-            <Card className={styles.sidePanelCard}>
-              <CardHeader
-                header={<Body1 style={{ fontWeight: 600 }}>Quick Filters</Body1>}
-                description="Useful shortcuts for future SharePoint list bindings"
-              />
-
-              <div className={styles.quickFilterStack}>
-                <div className={styles.quickFilterChip}><BoxRegular /> My Prompts</div>
-                <div className={styles.quickFilterChip}><StarRegular /> Favorites</div>
-                <div className={styles.quickFilterChip}><MegaphoneRegular /> Shared Library</div>
-                <div className={styles.quickFilterChip}><LightbulbRegular /> Recently Used</div>
-              </div>
-            </Card>
           </aside>
         </div>
       </div>

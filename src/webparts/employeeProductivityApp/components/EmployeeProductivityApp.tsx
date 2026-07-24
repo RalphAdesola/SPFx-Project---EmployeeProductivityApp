@@ -2,78 +2,72 @@ import * as React from 'react';
 import type { IEmployeeProductivityAppProps } from './IEmployeeProductivityAppProps';
 import type {
   IAiModelSummary,
+  IAdminSummary,
   ICategorySummary,
+  IDirectoryUser,
   IDashboardMetric,
   IDepartmentSummary,
   IPromptDetails,
   IPromptFilters,
+  IPersonalPromptInsights,
   IPromptWritePayload,
   IPromptSummary,
-  ITagSummary  
+  ITagSummary,
+  IUserSummary
 } from './SharedTypes';
 
 import LandingPage from './LandingPage';
 import DashboardPage from './DashboardPage';
 import LoadingScreen from './LoadingScreen';
 import AdminPage from './AdminPage';
+import PromptAssistantPage from './PromptAssistantPage';
 import SharePointService, { type ISharePointPromptWritePayload } from '../services/SharePointService';
-import type { ISeedReport } from './SharedTypes';
-
-const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => resolve(reader.result as ArrayBuffer);
-  reader.onerror = () => reject(reader.error || new Error('Unable to read selected file.'));
-  reader.readAsArrayBuffer(file);
-});
 
 export default function EmployeeProductivityApp(props: IEmployeeProductivityAppProps): React.ReactElement {
-  const [stage, setStage] = React.useState<'landing' | 'loading' | 'dashboard' | 'admin'>('landing');
+  const [stage, setStage] = React.useState<'landing' | 'loading' | 'dashboard' | 'admin' | 'prompt-assistant'>('landing');
+  const [dashboardNavItem, setDashboardNavItem] = React.useState('dashboard');
   const [searchTerm, setSearchTerm] = React.useState('');
   const [isLoadingVisible, setIsLoadingVisible] = React.useState(false);
   const [prompts, setPrompts] = React.useState<IPromptSummary[]>([]);
    const [categories, setCategories] = React.useState<ICategorySummary[]>([]);  const [departments, setDepartments] = React.useState<IDepartmentSummary[]>([]);
   const [models, setModels] = React.useState<IAiModelSummary[]>([]);
   const [tags, setTags] = React.useState<ITagSummary[]>([]);
+  const [users, setUsers] = React.useState<IUserSummary[]>([]);
+  const [admins, setAdmins] = React.useState<IAdminSummary[]>([]);
+  const [favoritePromptIds, setFavoritePromptIds] = React.useState<number[]>([]);
+  const [currentUserId, setCurrentUserId] = React.useState<number | undefined>(undefined);
   const [isLoadingData, setIsLoadingData] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [canAccessAdmin, setCanAccessAdmin] = React.useState(false);
-  const [adminReport, setAdminReport] = React.useState<ISeedReport | null>(null);
-  const [adminLog, setAdminLog] = React.useState<string[]>([]);
   const [isAdminProcessing, setIsAdminProcessing] = React.useState(false);
   const loadingTimerRef = React.useRef<number | undefined>(undefined);
   const fadeTimerRef = React.useRef<number | undefined>(undefined);
   const service = React.useMemo(() => SharePointService.initialize(props.context), [props.context]);
   const loadPrompts = React.useCallback(async (filters?: IPromptFilters): Promise<void> => {
-    const [promptItems, ratingItems] = await Promise.all([
+    const [promptItems, favoriteIds] = await Promise.all([
       service.getPrompts(filters),
-      service.getRatings()
+      service.getCurrentUserFavoritePromptIds()
     ]);
 
-    setPrompts(promptItems.map((prompt) => {
-      const promptRatings = ratingItems.filter((rating) => String(rating.promptId) === prompt.id);
-      const averageRating = promptRatings.length
-        ? promptRatings.reduce((sum, rating) => sum + rating.rating, 0) / promptRatings.length
-        : prompt.averageRating;
+    setFavoritePromptIds(favoriteIds);
 
-      return {
-        ...prompt,
-        averageRating: Number(averageRating.toFixed(1))
-      };
-    }));
+    setPrompts(promptItems);
   }, [service]);
 
   const loadReferenceData = React.useCallback(async (): Promise<void> => {
-    const [categoryItems, departmentItems, modelItems, tagItems] = await Promise.all([
+    const [categoryItems, departmentItems, modelItems, tagItems, userItems] = await Promise.all([
       service.getCategories(),
       service.getDepartments(),
       service.getModels(),
-      service.getTags()
+      service.getTags(),
+      service.getUsers()
     ]);
 
     setCategories(categoryItems);
     setDepartments(departmentItems);
     setModels(modelItems);
     setTags(tagItems);
+    setUsers(userItems);
   }, [service]);
 
   const resolveLookupId = React.useCallback(<TItem extends { id: number; title: string }>(items: TItem[], title: string | undefined): number | undefined => {
@@ -91,21 +85,30 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
       .filter((value): value is number => typeof value === 'number');
   }, []);
 
-  const mapFormToSharePointPayload = React.useCallback((payload: IPromptWritePayload): ISharePointPromptWritePayload => ({
-    title: payload.title,
-    description: payload.description,
-    promptText: payload.promptText,
-    categoryId: resolveLookupId(categories, payload.category) || 0,
-    aiModelId: resolveLookupId(models, payload.aiModel) || 0,
-    departmentId: resolveLookupId(departments, payload.department),
-    tagIds: resolveLookupIds(tags, payload.tags),
-    status: payload.status,
-    visibility: payload.visibility || 'Organization',
-    featured: Boolean(payload.featured),
-    documentUrl: payload.documentUrl,
-    promptOwnerId: undefined,
-    lastReviewed: undefined
-  }), [categories, departments, models, resolveLookupId, resolveLookupIds, tags]);
+  const mapFormToSharePointPayload = React.useCallback((payload: IPromptWritePayload): ISharePointPromptWritePayload => {
+    const categoryId = resolveLookupId(categories, payload.category);
+    const aiModelId = resolveLookupId(models, payload.aiModel);
+
+    if (!categoryId) {
+      throw new Error('Select a valid Category from the SharePoint list before saving.');
+    }
+
+    return {
+      title: payload.title,
+      description: payload.description,
+      promptText: payload.promptText,
+      categoryId,
+      aiModelId,
+      departmentId: resolveLookupId(departments, payload.department),
+      tagIds: resolveLookupIds(tags, payload.tags),
+      status: payload.status,
+      visibility: payload.visibility || 'Organization',
+      featured: Boolean(payload.featured),
+      documentUrl: payload.documentUrl,
+      promptOwnerId: undefined,
+      lastReviewed: undefined
+    };
+  }, [categories, departments, models, resolveLookupId, resolveLookupIds, tags]);
 
   const loadDashboardData = React.useCallback(async (filters?: IPromptFilters): Promise<void> => {
     setIsLoadingData(true);
@@ -132,7 +135,8 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
       setLoadError(null);
 
       try {
-        await Promise.all([loadPrompts(), loadReferenceData()]);
+        const [, , userId] = await Promise.all([loadPrompts(), loadReferenceData(), service.getCurrentUserId()]);
+        setCurrentUserId(userId);
 
         if (!active) {
           return;
@@ -194,36 +198,29 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
     }
   }, [stage, canAccessAdmin]);
 
+  React.useEffect(() => {
+    if (!canAccessAdmin) {
+      setAdmins([]);
+      return;
+    }
+
+    void service.getAdmins().then(setAdmins).catch(() => setAdmins([]));
+  }, [canAccessAdmin, service]);
+
   const handleFiltersChange = React.useCallback((filters: IPromptFilters): void => {
     void loadDashboardData(filters);
   }, [loadDashboardData]);
 
-  const handleCreatePrompt = React.useCallback(async (payload: IPromptWritePayload, file?: File): Promise<void> => {
-    let documentUrl = payload.documentUrl;
-
-    if (file) {
-      const upload = await service.uploadPromptAsset(file.name, await readFileAsArrayBuffer(file));
-      documentUrl = upload.serverRelativeUrl;
-    }
-
+  const handleCreatePrompt = React.useCallback(async (payload: IPromptWritePayload): Promise<void> => {
     await service.createPrompt({
-      ...mapFormToSharePointPayload({ ...payload, documentUrl }),
-      documentUrl
+      ...mapFormToSharePointPayload(payload)
     });
     await loadDashboardData();
   }, [service, loadDashboardData, mapFormToSharePointPayload]);
 
-  const handleUpdatePrompt = React.useCallback(async (id: number, payload: IPromptWritePayload, file?: File): Promise<void> => {
-    let documentUrl = payload.documentUrl;
-
-    if (file) {
-      const upload = await service.uploadPromptAsset(file.name, await readFileAsArrayBuffer(file));
-      documentUrl = upload.serverRelativeUrl;
-    }
-
+  const handleUpdatePrompt = React.useCallback(async (id: number, payload: IPromptWritePayload): Promise<void> => {
     await service.updatePrompt(id, {
-      ...mapFormToSharePointPayload({ ...payload, documentUrl }),
-      documentUrl
+      ...mapFormToSharePointPayload(payload)
     });
     await loadDashboardData();
   }, [service, loadDashboardData, mapFormToSharePointPayload]);
@@ -249,74 +246,47 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
     return prompt.promptText;
   }, [service, loadDashboardData]);
 
-  const handleSubmitRating = React.useCallback(async (id: number, rating: number): Promise<void> => {
-    await service.submitRating(id, rating);
-    await loadDashboardData();
-  }, [service, loadDashboardData]);
+  const handleAddAdmin = React.useCallback(async (email: string): Promise<void> => {
+    await service.addAdmin(email);
+    setAdmins(await service.getAdmins());
+  }, [service]);
 
-  const handleSeedAllData = React.useCallback(async (): Promise<void> => {
-    if (!canAccessAdmin) {
-      setStage('dashboard');
-      return;
-    }
+  const handleRemoveAdmin = React.useCallback(async (listItemId: number): Promise<void> => {
+    await service.removeAdmin(listItemId);
+    setAdmins(await service.getAdmins());
+  }, [service]);
 
-    setIsAdminProcessing(true);
-    setAdminLog([]);
-    try {
-      const report = await service.seedDemoData({
-        onProgress: (message) => setAdminLog((current) => [...current, message])
-      });
-      setAdminReport(report);
-      await loadDashboardData();
-    } finally {
-      setIsAdminProcessing(false);
-    }
-  }, [canAccessAdmin, service, loadDashboardData]);
+  const handleSearchDirectoryUsers = React.useCallback(async (searchText: string): Promise<IDirectoryUser[]> => {
+    return service.searchDirectoryUsers(searchText);
+  }, [service]);
 
-  const handleClearDemoData = React.useCallback(async (): Promise<void> => {
-    if (!canAccessAdmin) {
-      setStage('dashboard');
-      return;
-    }
+  const handleSetPromptFavorite = React.useCallback(async (id: number, title: string, isFavorite: boolean): Promise<void> => {
+    await service.setPromptFavorite(id, title, isFavorite);
+    setFavoritePromptIds((current) => isFavorite
+      ? Array.from(new Set([...current, id]))
+      : current.filter((promptId) => promptId !== id));
+  }, [service]);
 
-    setIsAdminProcessing(true);
-    setAdminLog([]);
-    try {
-      const report = await service.clearDemoData({
-        onProgress: (message) => setAdminLog((current) => [...current, message])
-      });
-      setAdminReport(report);
-      await loadDashboardData();
-    } finally {
-      setIsAdminProcessing(false);
-    }
-  }, [canAccessAdmin, service, loadDashboardData]);
+  const myPrompts = React.useMemo(() => prompts.filter((prompt) => !prompt.isDeleted && prompt.createdById === currentUserId), [currentUserId, prompts]);
 
-  const dashboardMetrics: IDashboardMetric[] = React.useMemo(() => {
-    const activePrompts = prompts.filter((prompt) => !prompt.isDeleted);
-    const publishedPrompts = activePrompts.filter((prompt) => prompt.status === 'Published');
-    const draftPrompts = activePrompts.filter((prompt) => prompt.status === 'Draft');
-    const featuredPrompts = activePrompts.filter((prompt) => prompt.featured);
-    const averageRating = activePrompts.length
-      ? activePrompts.reduce((sum, prompt) => sum + prompt.averageRating, 0) / activePrompts.length
-      : 0;
-    const totalUsage = activePrompts.reduce((sum, prompt) => sum + prompt.usageCount, 0);
-    const mostUsedPrompt = [...activePrompts].sort((left, right) => right.usageCount - left.usageCount)[0];
-    const recentPrompt = [...activePrompts].sort((left, right) => new Date(right.createdDate).getTime() - new Date(left.createdDate).getTime())[0];
-    const topRatedPrompt = [...activePrompts].sort((left, right) => right.averageRating - left.averageRating)[0];
-
+  const personalMetrics: IDashboardMetric[] = React.useMemo(() => {
+    const publishedPrompts = myPrompts.filter((prompt) => prompt.status === 'Published');
+    const draftPrompts = myPrompts.filter((prompt) => prompt.status === 'Draft');
     return [
-      { label: 'Total Prompts', value: String(activePrompts.length), detail: 'Across enterprise libraries' },
-      { label: 'Published Prompts', value: String(publishedPrompts.length), detail: 'Ready for use' },
-      { label: 'Draft Prompts', value: String(draftPrompts.length), detail: 'In review or work-in-progress' },
-      { label: 'Featured Prompts', value: String(featuredPrompts.length), detail: 'Highlighted by governance' },
-      { label: 'Average Rating', value: averageRating ? averageRating.toFixed(1) : '0.0', detail: 'Across submitted ratings' },
-      { label: 'Total Usage', value: String(totalUsage), detail: 'Prompt executions and copies' },
-      { label: 'Most Used Prompt', value: mostUsedPrompt?.title || '—', detail: 'Highest usage count' },
-      { label: 'Recently Added Prompt', value: recentPrompt?.title || '—', detail: 'Latest SharePoint record' },
-      { label: 'Top Rated Prompt', value: topRatedPrompt?.title || '—', detail: 'Highest average rating' }
+      { label: 'Total Prompts', value: String(myPrompts.length), detail: 'Prompts you created' },
+      { label: 'Published', value: String(publishedPrompts.length), detail: 'Available to your audience' },
+      { label: 'Drafts', value: String(draftPrompts.length), detail: 'One saved draft allowed' }
     ];
-  }, [prompts]);
+  }, [myPrompts]);
+
+  const personalInsights: IPersonalPromptInsights = React.useMemo(() => {
+    const mostUsed = [...myPrompts].sort((left, right) => right.usageCount - left.usageCount)[0];
+    const recentlyAdded = [...myPrompts].sort((left, right) => new Date(right.createdDate).getTime() - new Date(left.createdDate).getTime())[0];
+    return {
+      mostUsed: mostUsed?.title || 'No prompt activity yet',
+      recentlyAdded: recentlyAdded?.title || 'No prompts created yet'
+    };
+  }, [myPrompts]);
 
   const handleProceed = (): void => {
     setStage('loading');
@@ -350,12 +320,15 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
       return (
         <DashboardPage
           displayName={props.userDisplayName}
-          metrics={dashboardMetrics}
+          metrics={personalMetrics}
           categories={categories}
           departments={departments}
           models={models}
           tags={tags}
           prompts={prompts}
+          favoritePromptIds={favoritePromptIds}
+          myPrompts={myPrompts}
+          personalInsights={personalInsights}
           searchTerm={searchTerm}
           onSearchTermChange={setSearchTerm}
           onBackToLanding={() => setStage('landing')}
@@ -368,8 +341,9 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
           onViewPrompt={handleViewPrompt}
           onDeletePrompt={handleDeletePrompt}
           onCopyPrompt={handleCopyPrompt}
-          onSubmitRating={handleSubmitRating}
+          onSetPromptFavorite={handleSetPromptFavorite}
           onNavigateToAdmin={() => setStage('admin')}
+          onNavigateToPromptAssistant={() => setStage('prompt-assistant')}
           canAccessAdmin={canAccessAdmin}
         />
       );
@@ -379,24 +353,34 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
       <AdminPage
         canAccess={canAccessAdmin}
         isProcessing={isAdminProcessing}
-        progressLog={adminLog}
-        report={adminReport}
-        onSeedAllData={handleSeedAllData}
-        onClearDemoData={handleClearDemoData}
+        users={users}
+        admins={admins}
+        prompts={prompts.filter((prompt) => !prompt.isDeleted)}
+        onAddAdmin={handleAddAdmin}
+        onRemoveAdmin={handleRemoveAdmin}
+        onSearchDirectoryUsers={handleSearchDirectoryUsers}
+        onDeletePrompt={handleDeletePrompt}
         onBack={() => setStage('dashboard')}
       />
     );
   }
 
+  if (stage === 'prompt-assistant') {
+    return <PromptAssistantPage categories={categories} departments={departments} tags={tags} onCreatePrompt={handleCreatePrompt} onBack={() => { setDashboardNavItem('dashboard'); setStage('dashboard'); }} onSaveSuccess={() => { setDashboardNavItem('my-prompts'); setStage('dashboard'); }} />;
+  }
+
   return (
     <DashboardPage
       displayName={props.userDisplayName}
-      metrics={dashboardMetrics}
+      metrics={personalMetrics}
       categories={categories}
       departments={departments}
       models={models}
       tags={tags}
       prompts={prompts}
+      favoritePromptIds={favoritePromptIds}
+      myPrompts={myPrompts}
+      personalInsights={personalInsights}
       searchTerm={searchTerm}
       onSearchTermChange={setSearchTerm}
       onBackToLanding={() => setStage('landing')}
@@ -409,8 +393,10 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
       onViewPrompt={handleViewPrompt}
       onDeletePrompt={handleDeletePrompt}
       onCopyPrompt={handleCopyPrompt}
-      onSubmitRating={handleSubmitRating}
+      onSetPromptFavorite={handleSetPromptFavorite}
       onNavigateToAdmin={() => setStage('admin')}
+      onNavigateToPromptAssistant={() => setStage('prompt-assistant')}
+      initialNavItem={dashboardNavItem}
       canAccessAdmin={canAccessAdmin}
     />
   );

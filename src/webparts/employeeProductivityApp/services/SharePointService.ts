@@ -1,21 +1,21 @@
 import type { WebPartContext } from '@microsoft/sp-webpart-base';
+import type { MSGraphClientV3 } from '@microsoft/sp-http';
 import { spfi, type SPFI } from '@pnp/sp';
 import { SPFx } from '@pnp/sp/behaviors/spfx';
 import '@pnp/sp/webs';
 import '@pnp/sp/lists';
 import '@pnp/sp/items';
-import '@pnp/sp/files';
-import '@pnp/sp/folders';
 import '@pnp/sp/site-users/web';
 
 import type {
   IActivityLogEntry,
   IAiModelSummary,
+  IAdminSummary,
   ICategorySummary,
+  IDirectoryUser,
   IDepartmentSummary,
   IPromptDetails,
   IPromptFilters,
-  IPromptRating,
   IPromptSummary,
   ISeedReport,
   ITagSummary,
@@ -26,27 +26,18 @@ type ItemShape = Record<string, unknown> & { Id: number; Title?: string };
 type PersonShape = { Title?: string; Email?: string; EMail?: string; Id?: number };
 type LookupShape = { Id?: number; Title?: string };
 type ItemAddShape = { data?: { Id?: number }; Id?: number };
-type FileAddShape = { ServerRelativeUrl?: string; data?: { ServerRelativeUrl?: string } };
-
-type FileContent = string | Blob | ArrayBuffer;
-
-export interface IFileUploadResult {
-  fileName: string;
-  serverRelativeUrl: string;
-}
 
 export interface ISharePointPromptWritePayload {
   title: string;
   description: string;
   promptText: string;
   categoryId: number;
-  aiModelId: number;
+  aiModelId?: number;
   departmentId?: number;
   tagIds: number[];
   status: string;
   visibility: string;
   featured: boolean;
-  averageRating?: number;
   usageCount?: number;
   documentUrl?: string;
   promptOwnerId?: number;
@@ -64,16 +55,8 @@ const LISTS = {
   models: 'AI Models',
   tags: 'Tags',
   users: 'Users',
-  admins: 'Admins',
-  ratings: 'Prompt Ratings',
+  admins: 'App Administrator',
   activities: 'Activity Log'
-} as const;
-
-const LIBRARIES = {
-  promptAssets: 'Prompt Assets',
-  knowledgeBase: 'AI Knowledge Base',
-  trainingMaterials: 'Training Materials',
-  brandingAssets: 'Branding Assets'
 } as const;
 
 const DEMO_PREFIX = 'DEMO - ';
@@ -85,12 +68,7 @@ type SeedProgressKey =
   | 'users'
   | 'tags'
   | 'prompts'
-  | 'ratings'
-  | 'activities'
-  | 'promptAssets'
-  | 'knowledgeBase'
-  | 'trainingMaterials'
-  | 'brandingAssets';
+  | 'activities';
 
 const createProgressEntry = (label: string) => ({
   label,
@@ -103,6 +81,7 @@ const createProgressEntry = (label: string) => ({
 class SharePointService {
   private static instance: SharePointService | undefined;
   private sp: SPFI | undefined;
+  private context: WebPartContext | undefined;
 
   public static initialize(context: WebPartContext): SharePointService {
     if (!SharePointService.instance) {
@@ -110,6 +89,7 @@ class SharePointService {
     }
 
     SharePointService.instance.sp = spfi().using(SPFx(context));
+    SharePointService.instance.context = context;
     return SharePointService.instance;
   }
 
@@ -158,6 +138,27 @@ class SharePointService {
     return value as PersonShape;
   }
 
+  private async getGraphClient(): Promise<MSGraphClientV3> {
+    if (!this.context) {
+      throw new Error('SharePointService is not initialized.');
+    }
+
+    return this.context.msGraphClientFactory.getClient('3');
+  }
+
+  private toPeople(value: unknown): PersonShape[] {
+    if (Array.isArray(value)) {
+      return value.map((entry) => this.toPerson(entry)).filter((entry): entry is PersonShape => Boolean(entry));
+    }
+
+    if (value && typeof value === 'object' && Array.isArray((value as { results?: unknown[] }).results)) {
+      return this.toPeople((value as { results: unknown[] }).results);
+    }
+
+    const person = this.toPerson(value);
+    return person ? [person] : [];
+  }
+
   private normalizeTags(value: unknown): string[] {
     if (Array.isArray(value)) {
       return value.map((entry) => this.toText(entry).trim()).filter(Boolean);
@@ -203,7 +204,6 @@ class SharePointService {
       createdBy: this.toText(owner || item.Author || item.CreatedBy),
       createdById: owner?.Id,
       createdDate: this.toText(item.Created || item.Modified),
-      averageRating: Number(item.AverageRating || 0),
       usageCount: Number(item.UsageCount || 0),
       documentUrl: item.DocumentUrl ? this.toText(item.DocumentUrl) : undefined,
       department: department?.Title,
@@ -246,24 +246,13 @@ class SharePointService {
     };
   }
 
-  private mapRating(item: ItemShape): IPromptRating {
-    return {
-      id: item.Id,
-      promptId: Number(item.PromptId || 0),
-      rating: Number(item.Rating || 0),
-      comment: item.Comment ? this.toText(item.Comment) : undefined,
-      createdBy: this.toText(item.Author || item.CreatedBy),
-      createdDate: this.toText(item.Created || item.Modified)
-    };
-  }
-
   private mapActivity(item: ItemShape): IActivityLogEntry {
     return {
       id: item.Id,
       action: this.toText(item.ActivityType),
       promptId: item.PromptId ? Number(item.PromptId) : undefined,
       promptTitle: item.PromptTitle ? this.toText(item.PromptTitle) : undefined,
-      actor: this.toText(item.Actor || item.Author),
+      actor: this.toText(this.toPerson(item.Actor) || item.Author),
       details: item.Details ? this.toText(item.Details) : undefined,
       createdDate: this.toText(item.Created || item.Modified)
     };
@@ -271,23 +260,131 @@ class SharePointService {
 
   public async isCurrentUserAdmin(): Promise<boolean> {
     const currentUser = await this.web.currentUser();
-    const currentEmail = (currentUser.Email || '').trim().toLowerCase();
+    const currentEmail = (currentUser.Email || (currentUser as { EMail?: string }).EMail || '').trim().toLowerCase();
+    const currentUserId = Number(currentUser.Id || 0);
 
-    if (!currentEmail) {
+    if (!currentEmail && !currentUserId) {
       return false;
     }
 
     const items = await this.web.lists.getByTitle(LISTS.admins).items
-      .select('Id,Active,User/Id,User/Title,User/EMail')
+      .select('Id,UserId,User/Id,User/Title,User/EMail')
       .expand('User')
       .top(5000)();
 
     return (items as ItemShape[]).some((item) => {
-      const adminUser = this.toPerson(item.User);
-      const isActive = Boolean(item.Active);
-      const adminEmail = (adminUser?.EMail || adminUser?.Email || '').trim().toLowerCase();
-      return isActive && adminEmail === currentEmail;
+      return this.toPeople(item.User).some((adminUser) => {
+        const adminEmail = (adminUser.EMail || adminUser.Email || '').trim().toLowerCase();
+        return (Boolean(currentEmail) && adminEmail === currentEmail)
+          || (Boolean(currentUserId) && Number(adminUser.Id || 0) === currentUserId);
+      }) || Number(item.UserId || 0) === currentUserId;
     });
+  }
+
+  public async getAdmins(): Promise<IAdminSummary[]> {
+    const items = await this.web.lists.getByTitle(LISTS.admins).items
+      .select('Id,UserId,User/Id,User/Title,User/EMail')
+      .expand('User')
+      .top(5000)();
+
+    return (items as ItemShape[])
+      .flatMap((item) => this.toPeople(item.User).map((adminUser) => ({
+        listItemId: item.Id,
+        userId: Number(adminUser.Id || item.UserId || 0),
+        title: adminUser.Title || adminUser.EMail || adminUser.Email || 'Administrator',
+        email: adminUser.EMail || adminUser.Email
+      })));
+  }
+
+  public async getCurrentUserId(): Promise<number> {
+    const currentUser = await this.web.currentUser();
+    const currentUserId = Number(currentUser.Id || 0);
+
+    if (!currentUserId) {
+      throw new Error('Unable to determine the current SharePoint user.');
+    }
+
+    return currentUserId;
+  }
+
+  public async addAdmin(email: string): Promise<void> {
+    if (!await this.isCurrentUserAdmin()) {
+      throw new Error('Only application administrators can add another administrator.');
+    }
+
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) {
+      throw new Error('Enter an administrator email address.');
+    }
+
+    const siteUser = await this.web.ensureUser(normalizedEmail);
+    const existingItems = await this.web.lists.getByTitle(LISTS.admins).items
+      .select('Id,UserId')
+      .filter(`UserId eq ${siteUser.Id}`)
+      .top(5000)();
+    const existing = (existingItems as ItemShape[]);
+
+    if (existing.length > 0) {
+      throw new Error('This user has already been configured as an administrator.');
+    }
+
+    await this.web.lists.getByTitle(LISTS.admins).items.add({
+      Title: normalizedEmail,
+      UserId: siteUser.Id
+    });
+  }
+
+  public async removeAdmin(listItemId: number): Promise<void> {
+    if (!await this.isCurrentUserAdmin()) {
+      throw new Error('Only application administrators can remove another administrator.');
+    }
+
+    const currentUserId = await this.getCurrentUserId();
+    const adminItem = await this.web.lists.getByTitle(LISTS.admins).items
+      .getById(listItemId)
+      .select('Id,UserId')();
+
+    if (Number((adminItem as ItemShape).UserId || 0) === currentUserId) {
+      throw new Error('You cannot remove your own administrator access.');
+    }
+
+    await this.web.lists.getByTitle(LISTS.admins).items.getById(listItemId).delete();
+  }
+
+  public async searchDirectoryUsers(searchText: string): Promise<IDirectoryUser[]> {
+    const normalizedSearch = searchText.trim();
+    if (normalizedSearch.length < 2) {
+      return [];
+    }
+
+    const escapedSearch = normalizedSearch.replace(/'/g, "''");
+    const graphClient = await this.getGraphClient();
+    const response = await graphClient
+      .api('/users')
+      .version('v1.0')
+      .select('id,displayName,mail,userPrincipalName')
+      .filter(`startsWith(displayName,'${escapedSearch}') or startsWith(mail,'${escapedSearch}') or startsWith(userPrincipalName,'${escapedSearch}')`)
+      .top(10)
+      .get() as { value?: Array<{ id?: string; displayName?: string; mail?: string; userPrincipalName?: string }> };
+
+    return (response.value || [])
+      .filter((user) => Boolean(user.id && user.displayName && (user.mail || user.userPrincipalName)))
+      .map((user) => ({
+        id: user.id as string,
+        displayName: user.displayName as string,
+        email: (user.mail || user.userPrincipalName) as string
+      }));
+  }
+
+  public async hasCurrentUserDraft(excludePromptId?: number): Promise<boolean> {
+    const currentUserId = await this.getCurrentUserId();
+
+    const items = await this.web.lists.getByTitle(LISTS.prompts).items
+      .select('Id,Status,IsDeleted,PromptOwnerId')
+      .filter(`PromptOwnerId eq ${currentUserId} and Status eq 'Draft'`)
+      .top(2)();
+
+    return (items as ItemShape[]).some((item) => Number(item.Id) !== excludePromptId && !Boolean(item.IsDeleted));
   }
 
   private applyPromptFilters(prompts: IPromptSummary[], filters?: IPromptFilters): IPromptSummary[] {
@@ -335,12 +432,7 @@ class SharePointService {
       users: createProgressEntry('Users'),
       tags: createProgressEntry('Tags'),
       prompts: createProgressEntry('Prompts'),
-      ratings: createProgressEntry('Ratings'),
       activities: createProgressEntry('Activity Logs'),
-      promptAssets: createProgressEntry('Prompt Assets'),
-      knowledgeBase: createProgressEntry('AI Knowledge Base'),
-      trainingMaterials: createProgressEntry('Training Materials'),
-      brandingAssets: createProgressEntry('Branding Assets'),
       errors: []
     };
   }
@@ -415,7 +507,7 @@ class SharePointService {
       { title: `${DEMO_PREFIX}Godwin Onah`, email: 'godwin.onah@lotusbetaanalytics.com', department: `${DEMO_PREFIX}IT` }
     ];
 
-    const promptSeed: Array<{ title: string; category: string; aiModel: string; department: string; visibility: string; status: 'Published' | 'Draft'; featured: boolean; tags: string[]; description: string; promptText: string; usageCount: number; averageRating: number; owner: string; lastReviewed: string; documentFile?: string; }> = [];
+    const promptSeed: Array<{ title: string; category: string; aiModel: string; department: string; visibility: string; status: 'Published' | 'Draft'; featured: boolean; tags: string[]; description: string; promptText: string; usageCount: number; owner: string; lastReviewed: string; documentFile?: string; }> = [];
 
     const topics = [
       ['Sales', 'Pipeline Review Summary'],
@@ -470,7 +562,7 @@ class SharePointService {
       ['Operations', 'Warehouse Exception Note']
     ];
 
-    topics.forEach((topic, index) => {
+    topics.slice(0, 10).forEach((topic, index) => {
       promptSeed.push({
         title: `DEMO - ${topic[1]}`,
         category: `${DEMO_PREFIX}${topic[0]}`,
@@ -483,7 +575,6 @@ class SharePointService {
         description: `Enterprise demo prompt for ${topic[0].toLowerCase()} teams.`,
         promptText: `You are helping with ${topic[1].toLowerCase()}. Produce a concise, professional response for internal use.`,
         usageCount: 10 + index * 3,
-        averageRating: Number((3.2 + (index % 18) * 0.1).toFixed(1)),
         owner: userSeed[index % userSeed.length].title,
         lastReviewed: new Date(Date.now() - (index % 90) * 86400000).toISOString()
       });
@@ -579,11 +670,12 @@ class SharePointService {
           CategoryId: categoryMap.get(entry.category),
           AIModelId: modelMap.get(entry.aiModel),
           DepartmentId: departmentMap.get(entry.department),
-          TagsId: { results: entry.tags.map((tag) => tagMap.get(tag)).filter((id): id is number => typeof id === 'number') },
+          TagsId: entry.tags
+            .map((tag) => tagMap.get(tag))
+            .filter((id): id is number => typeof id === 'number'),
           Status: entry.status,
           Visibility: entry.visibility,
           Featured: entry.featured,
-          AverageRating: entry.averageRating,
           UsageCount: entry.usageCount,
           DocumentUrl: '',
           IsDeleted: false,
@@ -591,9 +683,6 @@ class SharePointService {
           LastReviewed: entry.lastReviewed
         });
 
-        const promptId = Number(response?.data?.Id || response?.Id);
-        const asset = await this.uploadPromptAsset(`${DEMO_PREFIX}Prompt ${promptId} Template.txt`, `Prompt template for ${entry.title}`);
-        await this.web.lists.getByTitle(LISTS.prompts).items.getById(promptId).update({ DocumentUrl: asset.serverRelativeUrl });
         report.prompts.created += 1;
         callbacks?.onProgress?.(`✔ Prompts created: ${entry.title}`);
       } catch (error) {
@@ -602,36 +691,11 @@ class SharePointService {
     }
     this.markProgress(report, 'prompts', 'complete');
 
-    this.markProgress(report, 'ratings', 'running');
     const prompts = await this.getPrompts();
-    for (const prompt of prompts.filter((item) => item.title.startsWith(DEMO_PREFIX)).slice(0, 50)) {
-      try {
-        const promptId = Number(prompt.id);
-        const ratingsToCreate = 4 + (promptId % 2);
-        for (let index = 0; index < ratingsToCreate; index += 1) {
-          const title = `${prompt.title} Rating ${index + 1}`;
-          if (await this.listItemExistsByTitle(LISTS.ratings, title)) {
-            report.ratings.skipped += 1;
-            continue;
-          }
-
-          await this.web.lists.getByTitle(LISTS.ratings).items.add({
-            Title: title,
-            PromptId: promptId,
-            Rating: 3 + ((promptId + index) % 3),
-            Comment: 'Demo rating for showcase data.'
-          });
-          report.ratings.created += 1;
-          callbacks?.onProgress?.(`✔ Ratings created: ${prompt.title}`);
-        }
-      } catch (error) {
-        this.recordFailure(report, 'ratings', `Ratings: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    this.markProgress(report, 'ratings', 'complete');
 
     this.markProgress(report, 'activities', 'running');
-    const activityActions = ['Prompt Created', 'Prompt Updated', 'Prompt Viewed', 'Prompt Copied', 'Rating Submitted', 'Prompt Favorited', 'Prompt Shared'];
+    const activityActions = ['Prompt Created', 'Prompt Updated', 'Prompt Viewed', 'Prompt Copied', 'Prompt Favorited', 'Prompt Shared'];
+    const currentUser = await this.web.currentUser();
     for (let index = 0; index < 90; index += 1) {
       try {
         const prompt = prompts[index % prompts.length];
@@ -651,7 +715,7 @@ class SharePointService {
           ActivityType: activityActions[index % activityActions.length],
           PromptId: Number(prompt.id),
           PromptTitle: prompt.title,
-          Actor: prompt.createdBy,
+          ActorId: currentUser.Id,
           Details: `Demo history entry created at ${when}`
         });
         report.activities.created += 1;
@@ -660,36 +724,6 @@ class SharePointService {
       }
     }
     this.markProgress(report, 'activities', 'complete');
-
-    const uploadSeeds: Array<[SeedProgressKey, string, string, string[]]> = [
-      ['promptAssets', LIBRARIES.promptAssets, 'png', ['Prompt icon', 'Flow diagram', 'Architecture sketch', 'Template card']],
-      ['knowledgeBase', LIBRARIES.knowledgeBase, 'pdf', ['Policy brief', 'How-to guide', 'FAQ', 'Best practices']],
-      ['trainingMaterials', LIBRARIES.trainingMaterials, 'pptx', ['Training deck', 'Workshop slides', 'Product demo', 'Onboarding deck']],
-      ['brandingAssets', LIBRARIES.brandingAssets, 'pdf', ['Logo pack', 'Brand guide', 'Template', 'Signature']]
-    ];
-
-    for (const [key, libraryTitle, extension, items] of uploadSeeds) {
-      this.markProgress(report, key, 'running');
-      for (const item of items) {
-        try {
-          const fileName = `DEMO - ${item}.${extension}`;
-          const content = new Blob([`${item} demo asset generated for Employee Productivity App.`], { type: 'text/plain' });
-          const existing = await this.web.lists.getByTitle(libraryTitle).rootFolder.files.getByUrl(fileName).select('Name')().catch(() => null);
-
-          if (existing) {
-            report[key].skipped += 1;
-            continue;
-          }
-
-          await this.uploadFile(libraryTitle, fileName, content);
-          report[key].created += 1;
-          callbacks?.onProgress?.(`✔ Documents uploaded: ${fileName}`);
-        } catch (error) {
-          this.recordFailure(report, key, `${libraryTitle}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-      this.markProgress(report, key, 'complete');
-    }
 
     return report;
   }
@@ -704,7 +738,6 @@ class SharePointService {
       ['departments', LISTS.departments],
       ['users', LISTS.users],
       ['tags', LISTS.tags],
-      ['ratings', LISTS.ratings],
       ['activities', LISTS.activities]
     ];
 
@@ -723,38 +756,12 @@ class SharePointService {
       this.markProgress(report, key, 'complete');
     }
 
-    const libraryTitles: Array<[SeedProgressKey, string]> = [
-      ['promptAssets', LIBRARIES.promptAssets],
-      ['knowledgeBase', LIBRARIES.knowledgeBase],
-      ['trainingMaterials', LIBRARIES.trainingMaterials],
-      ['brandingAssets', LIBRARIES.brandingAssets]
-    ];
-
-    for (const [key, libraryTitle] of libraryTitles) {
-      this.markProgress(report, key, 'running');
-      try {
-        const files = await this.web.lists.getByTitle(libraryTitle).rootFolder.files.select('Name').top(5000)();
-        for (const file of files as Array<{ Name: string }>) {
-          if (!file.Name.startsWith(DEMO_PREFIX)) {
-            continue;
-          }
-
-          await this.web.lists.getByTitle(libraryTitle).rootFolder.files.getByUrl(file.Name).delete();
-          report[key].created += 1;
-          callbacks?.onProgress?.(`✔ Cleared ${libraryTitle}: ${file.Name}`);
-        }
-      } catch (error) {
-        this.recordFailure(report, key, `${libraryTitle}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      this.markProgress(report, key, 'complete');
-    }
-
     return report;
   }
 
   public async getPrompts(filters?: IPromptFilters): Promise<IPromptSummary[]> {
     const items = await this.web.lists.getByTitle(LISTS.prompts).items
-      .select('Id,Title,Description,PromptText,Category/Id,Category/Title,AIModel/Id,AIModel/Title,Department/Id,Department/Title,Tags/Id,Tags/Title,Featured,Status,PromptOwner/Id,PromptOwner/Title,PromptOwner/EMail,Created,Modified,UsageCount,AverageRating,DocumentUrl,IsDeleted')
+      .select('Id,Title,Description,PromptText,Category/Id,Category/Title,AIModel/Id,AIModel/Title,Department/Id,Department/Title,Tags/Id,Tags/Title,Featured,Status,PromptOwner/Id,PromptOwner/Title,PromptOwner/EMail,Created,Modified,UsageCount,DocumentUrl,IsDeleted')
       .expand('Category,AIModel,Department,Tags,PromptOwner')
       .top(5000)();
 
@@ -767,7 +774,7 @@ class SharePointService {
 
   public async getPromptById(id: number, logView = true): Promise<IPromptDetails | null> {
     const item = await this.web.lists.getByTitle(LISTS.prompts).items.getById(id)
-      .select('Id,Title,Description,PromptText,Category/Id,Category/Title,AIModel/Id,AIModel/Title,Department/Id,Department/Title,Tags/Id,Tags/Title,Featured,Status,Visibility,PromptOwner/Id,PromptOwner/Title,PromptOwner/EMail,LastReviewed,Created,Modified,UsageCount,AverageRating,DocumentUrl,IsDeleted')
+      .select('Id,Title,Description,PromptText,Category/Id,Category/Title,AIModel/Id,AIModel/Title,Department/Id,Department/Title,Tags/Id,Tags/Title,Featured,Status,Visibility,PromptOwner/Id,PromptOwner/Title,PromptOwner/EMail,LastReviewed,Created,Modified,UsageCount,DocumentUrl,IsDeleted')
       .expand('Category,AIModel,Department,Tags,PromptOwner')();
 
     if ((item as ItemShape).IsDeleted) {
@@ -783,6 +790,11 @@ class SharePointService {
   }
 
   public async createPrompt(payload: ISharePointPromptWritePayload): Promise<IPromptDetails> {
+    if (payload.status === 'Draft' && await this.hasCurrentUserDraft()) {
+      throw new Error('You can only have one saved draft at a time. Publish or delete your existing draft before saving another.');
+    }
+
+    const currentUser = await this.web.currentUser();
     const created = await this.web.lists.getByTitle(LISTS.prompts).items.add(this.removeUndefinedValues({
       Title: payload.title,
       Description: payload.description,
@@ -790,15 +802,14 @@ class SharePointService {
       CategoryId: payload.categoryId,
       AIModelId: payload.aiModelId,
       DepartmentId: payload.departmentId,
-      TagsId: { results: payload.tagIds || [] },
+      TagsId: payload.tagIds || [],
       Status: payload.status,
       Visibility: payload.visibility,
       Featured: Boolean(payload.featured),
-      AverageRating: Number(payload.averageRating || 0),
       UsageCount: Number(payload.usageCount || 0),
       DocumentUrl: payload.documentUrl || '',
       IsDeleted: false,
-      PromptOwnerId: payload.promptOwnerId,
+      PromptOwnerId: payload.promptOwnerId || currentUser.Id,
       LastReviewed: payload.lastReviewed
     }));
 
@@ -815,6 +826,10 @@ class SharePointService {
   }
 
   public async updatePrompt(id: number, payload: Partial<ISharePointPromptWritePayload>): Promise<IPromptDetails> {
+    if (payload.status === 'Draft' && await this.hasCurrentUserDraft(id)) {
+      throw new Error('You can only have one saved draft at a time. Publish or delete your existing draft before saving another.');
+    }
+
     await this.web.lists
   .getByTitle(LISTS.prompts)
   .items
@@ -827,11 +842,10 @@ class SharePointService {
       CategoryId: payload.categoryId,
       AIModelId: payload.aiModelId,
       DepartmentId: payload.departmentId,
-      TagsId: payload.tagIds ? { results: payload.tagIds } : undefined,
+      TagsId: payload.tagIds,
       Status: payload.status,
       Visibility: payload.visibility,
       Featured: payload.featured,
-      AverageRating: payload.averageRating,
       UsageCount: payload.usageCount,
       DocumentUrl: payload.documentUrl,
       PromptOwnerId: payload.promptOwnerId,
@@ -850,6 +864,16 @@ class SharePointService {
 
   public async deletePrompt(id: number): Promise<void> {
     const prompt = await this.getPromptById(id, false);
+    const currentUser = await this.web.currentUser();
+    const isAdministrator = await this.isCurrentUserAdmin();
+
+    if (!prompt) {
+      throw new Error('Prompt was not found.');
+    }
+
+    if (!isAdministrator && prompt.createdById !== currentUser.Id) {
+      throw new Error('You can only delete prompts that you created.');
+    }
 
     await this.web.lists.getByTitle(LISTS.prompts).items.getById(id).update({
       IsDeleted: true,
@@ -894,86 +918,82 @@ class SharePointService {
   }
 
   public async getUsers(): Promise<IUserSummary[]> {
-    const items = await this.web.lists.getByTitle(LISTS.users).items.select('Id,Title,EMail,Department').top(5000)();
-    return (items as ItemShape[]).map((item) => this.mapUser(item));
-  }
+    try {
+      const items = await this.web.lists.getByTitle(LISTS.users).items.select('Id,Title,EMail,Department').top(5000)();
+      return (items as ItemShape[]).map((item) => this.mapUser(item));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.indexOf(`List '${LISTS.users}' does not exist`) >= 0) {
+        return [];
+      }
 
-  public async getRatings(promptId?: number): Promise<IPromptRating[]> {
-    const items = await this.web.lists.getByTitle(LISTS.ratings).items
-      .select('Id,PromptId,Rating,Comment,Author/Title,Author/EMail,Created,Modified')
-      .expand('Author')
-      .top(5000)();
-
-    const ratings = (items as ItemShape[]).map((item) => this.mapRating(item));
-    return promptId ? ratings.filter((rating) => rating.promptId === promptId) : ratings;
-  }
-
-  public async submitRating(promptId: number, rating: number, comment?: string): Promise<void> {
-    await this.web.lists.getByTitle(LISTS.ratings).items.add({
-      Title: `Prompt ${promptId} Rating`,
-      PromptId: promptId,
-      Rating: rating,
-      Comment: comment || ''
-    });
-
-    const ratings = await this.getRatings(promptId);
-    const averageRating = ratings.length
-      ? ratings.reduce((sum, item) => sum + item.rating, 0) / ratings.length
-      : 0;
-
-    await this.web.lists.getByTitle(LISTS.prompts).items.getById(promptId).update({
-      AverageRating: Number(averageRating.toFixed(2))
-    });
-
-    await this.logActivity('Rating Submitted', promptId, undefined, `Submitted ${rating} star rating.`);
+      throw error;
+    }
   }
 
   public async getActivities(): Promise<IActivityLogEntry[]> {
     const items = await this.web.lists.getByTitle(LISTS.activities).items
-      .select('Id,ActivityType,PromptId,PromptTitle,Actor,Details,Author/Title,Created,Modified')
-      .expand('Author')
+      .select('Id,ActivityType,PromptId,PromptTitle,Actor/Id,Actor/Title,Actor/EMail,Details,Author/Title,Created,Modified')
+      .expand('Actor,Author')
       .top(5000)();
 
     return (items as ItemShape[]).map((item) => this.mapActivity(item));
   }
 
-  public async logActivity(action: string, promptId?: number, promptTitle?: string, details?: string): Promise<void> {
+  public async getCurrentUserFavoritePromptIds(): Promise<number[]> {
     const currentUser = await this.web.currentUser();
+    const actorNames = [currentUser.Title, currentUser.Email]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.trim().toLowerCase());
+    const activities = await this.getActivities();
+    const favorites = new Set<number>();
 
-    await this.web.lists.getByTitle(LISTS.activities).items.add({
-      Title: action,
-      ActivityType: action,
-      PromptId: promptId,
-      PromptTitle: promptTitle || '',
-      Actor: currentUser.Title || currentUser.Email || '',
-      Details: details || ''
-    });
+    activities
+      .filter((activity) => actorNames.indexOf(activity.actor.trim().toLowerCase()) >= 0)
+      .sort((left, right) => new Date(left.createdDate).getTime() - new Date(right.createdDate).getTime())
+      .forEach((activity) => {
+        if (!activity.promptId) {
+          return;
+        }
+
+        if (activity.action === 'Prompt Favorited') {
+          favorites.add(activity.promptId);
+        }
+
+        if (activity.action === 'Prompt Unfavorited') {
+          favorites.delete(activity.promptId);
+        }
+      });
+
+    return Array.from(favorites);
   }
 
-  private async uploadFile(libraryTitle: string, fileName: string, content: FileContent): Promise<IFileUploadResult> {
-    const file = await this.web.lists.getByTitle(libraryTitle).rootFolder.files.addUsingPath(fileName, content, { Overwrite: true }) as FileAddShape;
-
-    return {
-      fileName,
-      serverRelativeUrl: file.ServerRelativeUrl || file.data?.ServerRelativeUrl || ''
-    };
+  public async setPromptFavorite(promptId: number, promptTitle: string, isFavorite: boolean): Promise<void> {
+    await this.logActivity(
+      isFavorite ? 'Prompt Favorited' : 'Prompt Unfavorited',
+      promptId,
+      promptTitle,
+      isFavorite ? `Favorited prompt "${promptTitle}".` : `Removed prompt "${promptTitle}" from favorites.`
+    );
   }
 
-  public async uploadPromptAsset(fileName: string, content: FileContent): Promise<IFileUploadResult> {
-    return this.uploadFile(LIBRARIES.promptAssets, fileName, content);
+  public async logActivity(action: string, promptId?: number, promptTitle?: string, details?: string): Promise<void> {
+    try {
+      const currentUser = await this.web.currentUser();
+
+      await this.web.lists.getByTitle(LISTS.activities).items.add(this.removeUndefinedValues({
+        Title: action,
+        ActivityType: action,
+        PromptId: promptId,
+        PromptTitle: promptTitle || '',
+        ActorId: currentUser.Id,
+        Details: details || ''
+      }));
+    } catch (error) {
+      console.warn('Unable to write an Activity Log record.', error);
+    }
   }
 
-  public async uploadKnowledgeBase(fileName: string, content: FileContent): Promise<IFileUploadResult> {
-    return this.uploadFile(LIBRARIES.knowledgeBase, fileName, content);
-  }
-
-  public async uploadTrainingMaterial(fileName: string, content: FileContent): Promise<IFileUploadResult> {
-    return this.uploadFile(LIBRARIES.trainingMaterials, fileName, content);
-  }
-
-  public async uploadBrandingAsset(fileName: string, content: FileContent): Promise<IFileUploadResult> {
-    return this.uploadFile(LIBRARIES.brandingAssets, fileName, content);
-  }
 }
 
 export default SharePointService;

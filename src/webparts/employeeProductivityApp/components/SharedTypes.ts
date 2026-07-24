@@ -4,6 +4,11 @@ export interface IDashboardMetric {
   detail: string;
 }
 
+export interface IPersonalPromptInsights {
+  mostUsed: string;
+  recentlyAdded: string;
+}
+
 export interface IPromptCategory {
   id: string;
   name: string;
@@ -40,6 +45,19 @@ export interface IUserSummary {
   department?: string;
 }
 
+export interface IDirectoryUser {
+  id: string;
+  displayName: string;
+  email: string;
+}
+
+export interface IAdminSummary {
+  listItemId: number;
+  userId: number;
+  title: string;
+  email?: string;
+}
+
 export interface IPromptSummary {
   id: string;
   title: string;
@@ -55,7 +73,6 @@ export interface IPromptSummary {
   createdBy: string;
   createdById?: number;
   createdDate: string;
-  averageRating: number;
   usageCount: number;
   documentUrl?: string;
   department?: string;
@@ -92,15 +109,6 @@ export interface IPromptFilters {
   status?: 'Published' | 'Draft';
 }
 
-export interface IPromptRating {
-  id: number;
-  promptId: number;
-  rating: number;
-  comment?: string;
-  createdBy: string;
-  createdDate: string;
-}
-
 export interface IActivityLogEntry {
   id: number;
   action: string;
@@ -126,12 +134,7 @@ export interface ISeedReport {
   users: ISeedProgressEntry;
   tags: ISeedProgressEntry;
   prompts: ISeedProgressEntry;
-  ratings: ISeedProgressEntry;
   activities: ISeedProgressEntry;
-  promptAssets: ISeedProgressEntry;
-  knowledgeBase: ISeedProgressEntry;
-  trainingMaterials: ISeedProgressEntry;
-  brandingAssets: ISeedProgressEntry;
   errors: string[];
 }
 
