@@ -486,6 +486,7 @@
 .sidebarNav {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .sidebarNavItem {
@@ -501,6 +502,8 @@
   text-align: left;
   cursor: pointer;
   transition: background-color 160ms ease, transform 160ms ease;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .sidebarNavItem:hover {
@@ -521,6 +524,7 @@
 .sidebarNavIcon {
   color: #2563eb;
   display: inline-flex;
+  flex: 0 0 auto;
 }
 
 .sidebarFooter {
@@ -795,7 +799,24 @@
   background: #ffffff;
 }
 
+.whiteDropdown {
+  position: relative;
+}
+
+.nativeFileInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 0.875rem;
+}
+
 .whiteDropdown :global(.fui-Input),
+.whiteDropdown :global(.fui-Dropdown),
+.whiteDropdown :global(button),
 .whiteInput :global(.fui-Input),
 .whiteTextarea :global(textarea) {
   background: #ffffff;
@@ -804,13 +825,31 @@
 
 .whiteDropdown :global(.fui-Button),
 .whiteDropdown :global(.fui-Input),
+.whiteDropdown :global(.fui-Dropdown),
 .whiteInput,
 .whiteTextarea {
   border-color: #cbd5e1;
 }
 
-.whiteDropdown :global([role='listbox']) {
+.whiteDropdown :global([role='listbox']),
+:global(.fui-Listbox),
+:global([role='listbox']) {
   background: #ffffff;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16);
+  z-index: 10000;
+}
+
+:global(.fui-Option),
+:global([role='option']) {
+  background: #ffffff;
+  color: #0f172a;
+}
+
+:global(.fui-Option:hover),
+:global([role='option']:hover) {
+  background: #eff6ff;
 }
 
 .dashboardTopbar {
@@ -908,13 +947,43 @@
     width: 100%;
     flex-basis: auto;
     height: auto;
-    position: relative;
-    top: auto;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 12px 16px;
+    gap: 12px;
   }
 
   .sidebarCollapsed {
     width: 100%;
     flex-basis: auto;
+  }
+
+  .sidebarBrandRow {
+    align-items: center;
+  }
+
+  .sidebarNav {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+
+  .sidebarNavItem {
+    width: auto;
+    flex: 0 0 auto;
+    padding: 10px 12px;
+  }
+
+  .sidebarCollapsed .sidebarNavItem {
+    width: 44px;
+    justify-content: center;
+  }
+
+  .sidebarFooter {
+    display: none;
   }
 
   .dashboardMain {

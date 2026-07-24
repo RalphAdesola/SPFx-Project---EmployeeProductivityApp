@@ -19,7 +19,8 @@ export default class EmployeeProductivityAppWebPart extends BaseClientSideWebPar
       EmployeeProductivityApp,
       {
         hasTeamsContext: !!this.context.sdks.microsoftTeams,
-        userDisplayName: this.context.pageContext.user.displayName
+        userDisplayName: this.context.pageContext.user.displayName,
+        context: this.context
       }
     );
 
