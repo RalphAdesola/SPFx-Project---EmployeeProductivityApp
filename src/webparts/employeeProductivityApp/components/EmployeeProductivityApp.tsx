@@ -23,8 +23,17 @@ import AdminPage from './AdminPage';
 import PromptAssistantPage from './PromptAssistantPage';
 import SharePointService, { type ISharePointPromptWritePayload } from '../services/SharePointService';
 
+const THEME_STORAGE_KEY = 'employee-productivity-app-theme';
+
 export default function EmployeeProductivityApp(props: IEmployeeProductivityAppProps): React.ReactElement {
   const [stage, setStage] = React.useState<'landing' | 'loading' | 'dashboard' | 'admin' | 'prompt-assistant'>('landing');
+  const [isDarkMode, setIsDarkMode] = React.useState(() => {
+    try {
+      return window.localStorage.getItem(THEME_STORAGE_KEY) === 'dark';
+    } catch {
+      return false;
+    }
+  });
   const [dashboardNavItem, setDashboardNavItem] = React.useState('dashboard');
   const [searchTerm, setSearchTerm] = React.useState('');
   const [isLoadingVisible, setIsLoadingVisible] = React.useState(false);
@@ -43,6 +52,18 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
   const loadingTimerRef = React.useRef<number | undefined>(undefined);
   const fadeTimerRef = React.useRef<number | undefined>(undefined);
   const service = React.useMemo(() => SharePointService.initialize(props.context), [props.context]);
+
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, isDarkMode ? 'dark' : 'light');
+    } catch {
+      return;
+    }
+  }, [isDarkMode]);
+
+  const toggleTheme = React.useCallback((): void => {
+    setIsDarkMode((current) => !current);
+  }, []);
   const loadPrompts = React.useCallback(async (filters?: IPromptFilters): Promise<void> => {
     const [promptItems, favoriteIds] = await Promise.all([
       service.getPrompts(filters),
@@ -89,12 +110,12 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
     const categoryId = resolveLookupId(categories, payload.category);
     const aiModelId = resolveLookupId(models, payload.aiModel);
 
-    if (!categoryId) {
-      throw new Error('Select a valid Category from the SharePoint list before saving.');
+    if (payload.status === 'Published' && !categoryId) {
+      throw new Error('Select a valid Category from the SharePoint list before publishing.');
     }
 
     return {
-      title: payload.title,
+      title: payload.title.trim() || (payload.status === 'Draft' ? 'Untitled draft' : payload.title),
       description: payload.description,
       promptText: payload.promptText,
       categoryId,
@@ -312,7 +333,7 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
   }
 
   if (stage === 'landing') {
-    return <LandingPage onProceed={handleProceed} />;
+    return <LandingPage onProceed={handleProceed} isDarkMode={isDarkMode} />;
   }
 
   if (stage === 'admin') {
@@ -345,6 +366,8 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
           onNavigateToAdmin={() => setStage('admin')}
           onNavigateToPromptAssistant={() => setStage('prompt-assistant')}
           canAccessAdmin={canAccessAdmin}
+          isDarkMode={isDarkMode}
+          onToggleTheme={toggleTheme}
         />
       );
     }
@@ -361,12 +384,13 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
         onSearchDirectoryUsers={handleSearchDirectoryUsers}
         onDeletePrompt={handleDeletePrompt}
         onBack={() => setStage('dashboard')}
+        isDarkMode={isDarkMode}
       />
     );
   }
 
   if (stage === 'prompt-assistant') {
-    return <PromptAssistantPage categories={categories} departments={departments} tags={tags} onCreatePrompt={handleCreatePrompt} onBack={() => { setDashboardNavItem('dashboard'); setStage('dashboard'); }} onSaveSuccess={() => { setDashboardNavItem('my-prompts'); setStage('dashboard'); }} />;
+    return <PromptAssistantPage categories={categories} departments={departments} tags={tags} onCreatePrompt={handleCreatePrompt} onBack={() => { setDashboardNavItem('dashboard'); setStage('dashboard'); }} onSaveSuccess={() => { setDashboardNavItem('my-prompts'); setStage('dashboard'); }} isDarkMode={isDarkMode} />;
   }
 
   return (
@@ -398,6 +422,8 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
       onNavigateToPromptAssistant={() => setStage('prompt-assistant')}
       initialNavItem={dashboardNavItem}
       canAccessAdmin={canAccessAdmin}
+      isDarkMode={isDarkMode}
+      onToggleTheme={toggleTheme}
     />
   );
 }

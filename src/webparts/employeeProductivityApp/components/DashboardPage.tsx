@@ -16,8 +16,7 @@ import {
   Dropdown,
   Option,
   Textarea,
-  Field,
-  makeStyles
+  Field
 } from '@fluentui/react-components';
 import {
   AddRegular,
@@ -34,7 +33,9 @@ import {
   SearchRegular,
   SettingsRegular,
   CheckmarkCircleRegular,
-  SignOutRegular
+  SignOutRegular,
+  WeatherMoonRegular,
+  WeatherSunnyRegular
 } from '@fluentui/react-icons';
 import styles from './EmployeeProductivityApp.module.scss';
 import type {
@@ -78,13 +79,9 @@ export interface IDashboardPageProps {
   onNavigateToPromptAssistant: () => void;
   initialNavItem?: string;
   canAccessAdmin: boolean;
+  isDarkMode: boolean;
+  onToggleTheme: () => void;
 }
-
-const useStyles = makeStyles({
-  pageSurface: {
-    backgroundColor: '#f8fafc'
-  }
-});
 
 const navigationItems = [
   { key: 'dashboard', label: 'Dashboard', icon: <HomeRegular /> },
@@ -95,7 +92,8 @@ const navigationItems = [
 ];
 
 const visibilityOptions = ['Organization', 'Department', 'Private'];
-const statusOptions: Array<'Published' | 'Draft'> = ['Published', 'Draft'];
+const statusOptions: Array<'Published' | 'Draft'> = ['Draft', 'Published'];
+const untitledDraftTitle = 'Untitled draft';
 const formatDate = (value: string): string => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -168,7 +166,6 @@ interface IConfirmationRequest {
 }
 
 export default function DashboardPage(props: IDashboardPageProps): React.ReactElement {
-  const pageStyles = useStyles();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [activeNavItem, setActiveNavItem] = React.useState(props.initialNavItem || 'dashboard');
   const [localSearch, setLocalSearch] = React.useState(props.searchTerm);
@@ -249,7 +246,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
 
   const getMissingPromptFields = (): PromptFormField[] => {
     const missing: PromptFormField[] = [];
-    if (!promptForm.title.trim()) missing.push('title');
+    if (!promptForm.title.trim() || promptForm.title.trim() === untitledDraftTitle) missing.push('title');
     if (!promptForm.category) missing.push('category');
     if (!promptForm.aiModel) missing.push('aiModel');
     if (!promptForm.description.trim()) missing.push('description');
@@ -280,8 +277,12 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
     try {
       const payload = buildPayload(status);
 
-      if (!validatePromptForm()) {
+      if (status === 'Published' && !validatePromptForm()) {
         return;
+      }
+
+      if (status === 'Draft') {
+        setValidationErrors([]);
       }
 
       if (editingPromptId) {
@@ -316,6 +317,11 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
 
     if (!prompt) {
       setActionError('Prompt was not found.');
+      return;
+    }
+
+    if (prompt.status !== 'Draft') {
+      setActionError('Only draft prompts can be edited.');
       return;
     }
 
@@ -415,9 +421,15 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
 
   const requestPromptSave = (action: 'publish' | 'draft' | 'save-edit'): void => {
     setActionError(null);
-    if (validatePromptForm()) {
-      setConfirmationRequest({ action });
+    if (action === 'publish' && !validatePromptForm()) {
+      return;
     }
+
+    if (action !== 'publish') {
+      setValidationErrors([]);
+    }
+
+    setConfirmationRequest({ action });
   };
 
   const toggleFavorite = async (prompt: IPromptSummary): Promise<void> => {
@@ -433,7 +445,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
   };
 
   return (
-    <section className={`${styles.employeeProductivityApp} ${pageStyles.pageSurface} ${styles.dashboardPage}`}>
+    <section className={`${styles.employeeProductivityApp} ${styles.dashboardPage} ${props.isDarkMode ? styles.dashboardDarkMode : ''}`}>
       <aside className={`${styles.sidebar} ${sidebarCollapsed ? styles.sidebarCollapsed : ''}`}>
         <div className={styles.sidebarBrandRow}>
           <div className={styles.sidebarLogo}>EP</div>
@@ -460,6 +472,9 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
               type="button"
               onClick={() => {
                 setActiveNavItem(item.key);
+                if (item.key === 'dashboard') {
+                  setSelectedStatus(undefined);
+                }
                 if (item.key === 'admin') {
                   props.onNavigateToAdmin();
                 }
@@ -498,6 +513,13 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
             </div>
 
             <Avatar name={props.displayName} />
+            <Button
+              appearance="subtle"
+              icon={props.isDarkMode ? <WeatherSunnyRegular /> : <WeatherMoonRegular />}
+              aria-label={props.isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={props.isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              onClick={props.onToggleTheme}
+            />
             <Button appearance="primary" icon={<AddRegular />} onClick={openNewPromptForm}>Add Prompt</Button>
           </div>
         </header>
@@ -541,7 +563,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
               </>
             )}
 
-            <section className={styles.controlsBar}>
+            <section className={`${styles.controlsBar} ${(isMyPromptsView || isFavoritesView) ? styles.controlsBarWithStatus : ''}`}>
               <div className={styles.filterField}>
                 <Field label="Category">
                   <Dropdown
@@ -593,6 +615,24 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                   </Dropdown>
                 </Field>
               </div>
+
+              {(isMyPromptsView || isFavoritesView) && (
+                <div className={styles.filterField}>
+                  <Field label="Status">
+                    <Dropdown
+                      className={styles.whiteDropdown}
+                      placeholder="All statuses"
+                      value={selectedStatus || ''}
+                      selectedOptions={selectedStatus ? [selectedStatus] : []}
+                      onOptionSelect={(_, data) => setSelectedStatus(data.optionValue ? data.optionValue as 'Published' | 'Draft' : undefined)}
+                    >
+                      {statusOptions.map((option) => (
+                        <Option key={option} value={option}>{option}</Option>
+                      ))}
+                    </Dropdown>
+                  </Field>
+                </div>
+              )}
             </section>
 
             <div className={styles.filterActions}>
@@ -675,7 +715,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                       </div>
                       <div className={styles.promptFooterActions}>
                         <Button appearance="secondary" icon={<CopyRegular />} onClick={() => copyPrompt(prompt.id)}>Copy Prompt</Button>
-                        {isMyPromptsView && <Button appearance="secondary" onClick={() => editPrompt(prompt.id)}>Edit</Button>}
+                        {isMyPromptsView && prompt.status === 'Draft' && <Button appearance="secondary" onClick={() => editPrompt(prompt.id)}>Edit</Button>}
                         {isMyPromptsView && <Button appearance="secondary" icon={<DeleteRegular />} onClick={() => setConfirmationRequest({ action: 'delete', promptId: prompt.id })}>Delete</Button>}
                         <Button appearance="primary" icon={<EyeRegular />} onClick={() => viewPrompt(prompt.id)}>View Details</Button>
                       </div>
@@ -788,11 +828,18 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
 
               {actionError && <Caption1 className={styles.promptFormActionError}>{actionError}</Caption1>}
 
-              <div className={styles.formActions}>
-                <Button appearance="primary" icon={<CheckmarkCircleRegular />} disabled={isSaving} onClick={() => requestPromptSave(editingPromptId ? 'save-edit' : 'publish')}>
-                  {editingPromptId ? 'Save Edit' : 'Publish'}
-                </Button>
-                {!editingPromptId && <Button appearance="secondary" disabled={isSaving} onClick={() => requestPromptSave('draft')}>Save Draft</Button>}
+              <div className={`${styles.formActions} ${editingPromptId ? styles.editFormActions : ''}`}>
+                {editingPromptId ? (
+                  <>
+                    <Button appearance="primary" icon={<CheckmarkCircleRegular />} disabled={isSaving} onClick={() => requestPromptSave('save-edit')}>Save Edit</Button>
+                    <Button appearance="secondary" disabled={isSaving} onClick={() => requestPromptSave('publish')}>Publish Edit</Button>
+                  </>
+                ) : (
+                  <>
+                    <Button appearance="primary" icon={<CheckmarkCircleRegular />} disabled={isSaving} onClick={() => requestPromptSave('publish')}>Publish</Button>
+                    <Button appearance="secondary" disabled={isSaving} onClick={() => requestPromptSave('draft')}>Save Draft</Button>
+                  </>
+                )}
                 <Button appearance="subtle" disabled={isSaving} onClick={() => setConfirmationRequest({ action: 'cancel' })}>Cancel</Button>
               </div>
             </Card>}

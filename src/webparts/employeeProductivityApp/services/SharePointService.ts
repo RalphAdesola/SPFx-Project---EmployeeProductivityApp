@@ -31,7 +31,7 @@ export interface ISharePointPromptWritePayload {
   title: string;
   description: string;
   promptText: string;
-  categoryId: number;
+  categoryId?: number;
   aiModelId?: number;
   departmentId?: number;
   tagIds: number[];

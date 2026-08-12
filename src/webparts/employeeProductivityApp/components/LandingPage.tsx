@@ -5,11 +5,12 @@ import styles from './EmployeeProductivityApp.module.scss';
 
 export interface ILandingPageProps {
   onProceed: () => void;
+  isDarkMode: boolean;
 }
 
 export default function LandingPage(props: ILandingPageProps): React.ReactElement {
   return (
-    <section className={styles.landingPage}>
+    <section className={`${styles.landingPage} ${props.isDarkMode ? styles.landingDarkMode : ''}`}>
       <div className={styles.landingCanvas}>
         <div className={styles.landingGlowLeft} />
         <div className={styles.landingGlowRight} />

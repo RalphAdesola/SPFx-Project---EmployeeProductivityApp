@@ -442,6 +442,98 @@
   color: #111827;
 }
 
+.dashboardDarkMode {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.dashboardDarkMode .sidebar {
+  background: #111827;
+  border-color: #273449;
+}
+
+.dashboardDarkMode .sidebarTitle,
+.dashboardDarkMode .pageTitle,
+.dashboardDarkMode .promptTitle,
+.dashboardDarkMode :global(.fui-Title1),
+.dashboardDarkMode :global(.fui-Title2),
+.dashboardDarkMode :global(.fui-Body1),
+.dashboardDarkMode :global(.fui-Body2),
+.dashboardDarkMode :global(.fui-Caption1),
+.dashboardDarkMode :global(.fui-Text) {
+  color: #e2e8f0;
+}
+
+.dashboardDarkMode .sidebarSubtitle,
+.dashboardDarkMode .sidebarNavItem,
+.dashboardDarkMode .promptDescription,
+.dashboardDarkMode .assistantNotice {
+  color: #cbd5e1;
+}
+
+.dashboardDarkMode .sidebarNavItem:hover {
+  background: #1e293b;
+}
+
+.dashboardDarkMode .sidebarNavItemActive {
+  background: linear-gradient(135deg, #1d4ed8 0%, #1e3a8a 100%);
+  color: #dbeafe;
+  box-shadow: inset 0 0 0 1px #3b82f6;
+}
+
+.dashboardDarkMode .sidebarNavItemActive .sidebarNavIcon,
+.dashboardDarkMode .sidebarNavIcon {
+  color: #93c5fd;
+}
+
+.dashboardDarkMode .promptCard,
+.dashboardDarkMode .sidePanelCard,
+.dashboardDarkMode .emptyStateCard,
+.dashboardDarkMode .metricCard,
+.dashboardDarkMode .promptMetaItem,
+.dashboardDarkMode .personalInsights > div {
+  background: linear-gradient(180deg, #172033 0%, #111827 100%);
+  border-color: #334155;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
+}
+
+.dashboardDarkMode .whiteDropdown,
+.dashboardDarkMode .whiteInput,
+.dashboardDarkMode .whiteTextarea,
+.dashboardDarkMode .whiteDropdown :global(.fui-Input),
+.dashboardDarkMode .whiteDropdown :global(.fui-Dropdown),
+.dashboardDarkMode .whiteDropdown :global(button),
+.dashboardDarkMode .whiteInput :global(.fui-Input),
+.dashboardDarkMode .whiteTextarea :global(textarea) {
+  background: #0b1220;
+  color: #e2e8f0;
+  border-color: #475569;
+}
+
+.dashboardDarkMode :global(input),
+.dashboardDarkMode :global(textarea),
+.dashboardDarkMode :global([role='combobox']) {
+  background: #0b1220;
+  color: #e2e8f0;
+  border-color: #475569;
+}
+
+.landingDarkMode .landingCanvas::before {
+  background:
+    linear-gradient(90deg, rgba(15, 23, 42, 0.88) 0%, rgba(15, 23, 42, 0.66) 48%, rgba(15, 23, 42, 0.5) 100%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.18) 0%, rgba(15, 23, 42, 0.48) 100%);
+}
+
+.landingDarkMode .landingTopLeftBrand,
+.landingDarkMode .landingTopRightTitle,
+.landingDarkMode .landingTitle {
+  color: #f8fafc;
+}
+
+.landingDarkMode .landingTopRightIcon {
+  color: #67e8f9;
+}
+
 .sidebar {
   width: 280px;
   flex: 0 0 280px;
@@ -888,6 +980,10 @@
   align-items: end;
 }
 
+.controlsBarWithStatus {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .filterActions {
   display: flex;
   align-items: end;
@@ -1009,6 +1105,19 @@
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 14px;
+}
+
+.editFormActions {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.editFormActions :global(button) {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-inline: 8px;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
 
 .quickFilterStack {

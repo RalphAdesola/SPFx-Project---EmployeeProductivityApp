@@ -18,6 +18,7 @@ export interface IPromptAssistantPageProps {
   onCreatePrompt: (payload: IPromptWritePayload) => Promise<void>;
   onBack: () => void;
   onSaveSuccess: () => void;
+  isDarkMode: boolean;
 }
 
 const outputPreferences = {
@@ -208,15 +209,7 @@ const buildContextAwarePrompt = (source: string, outcome: OutputPreference): str
   ].join('\n');
 };
 
-type AssistantFormField = 'title' | 'category' | 'department' | 'tags' | 'prompt';
-
-const assistantFormFieldLabels: Record<AssistantFormField, string> = {
-  title: 'Prompt title',
-  category: 'Category',
-  department: 'Owner department',
-  tags: 'Tags',
-  prompt: 'Prepared prompt'
-};
+type AssistantConfirmationAction = 'draft' | 'cancel';
 
 const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -275,8 +268,7 @@ export default function PromptAssistantPage(props: IPromptAssistantPageProps): R
   const [message, setMessage] = React.useState<string | undefined>();
   const [error, setError] = React.useState<string | undefined>();
   const [saving, setSaving] = React.useState(false);
-  const [isSaveConfirmationVisible, setIsSaveConfirmationVisible] = React.useState(false);
-  const [validationErrors, setValidationErrors] = React.useState<AssistantFormField[]>([]);
+  const [confirmationAction, setConfirmationAction] = React.useState<AssistantConfirmationAction | undefined>();
   const [isExtracting, setIsExtracting] = React.useState(false);
   const [selectedFileName, setSelectedFileName] = React.useState<string | undefined>();
 
@@ -314,33 +306,17 @@ export default function PromptAssistantPage(props: IPromptAssistantPageProps): R
     }
   };
 
-  const getMissingFields = (): AssistantFormField[] => {
-    const missing: AssistantFormField[] = [];
-    if (!title.trim()) missing.push('title');
-    if (!category) missing.push('category');
-    if (!department) missing.push('department');
-    if (!tags.length) missing.push('tags');
-    if (!prompt) missing.push('prompt');
-    return missing;
-  };
-
-  const hasValidationError = (field: AssistantFormField): boolean => validationErrors.indexOf(field) >= 0;
-
   const requestSave = (): void => {
     setError(undefined);
-    const missingFields = getMissingFields();
-    setValidationErrors(missingFields);
-    if (missingFields.length) {
-      setError(`Complete all required fields: ${missingFields.map((field) => assistantFormFieldLabels[field]).join(', ')}.`);
-      return;
-    }
+    setConfirmationAction('draft');
+  };
 
-    setIsSaveConfirmationVisible(true);
+  const requestCancel = (): void => {
+    setConfirmationAction('cancel');
   };
 
   const save = async (): Promise<void> => {
     setError(undefined);
-    setIsSaveConfirmationVisible(false);
     setSaving(true);
     try {
       await props.onCreatePrompt({ title: title.trim(), category, aiModel: '', description: `Prepared with Prompt Assistant using ${inferContextProfile(source).role} context inferred from the source material.`, promptText: prompt, tags, department, visibility: 'Organization', featured: false, status: 'Draft' });
@@ -351,7 +327,20 @@ export default function PromptAssistantPage(props: IPromptAssistantPageProps): R
     } finally { setSaving(false); }
   };
 
-  return <section className={`${styles.employeeProductivityApp} ${styles.dashboardPage}`}><div className={styles.dashboardMain}>
+  const confirmAction = async (): Promise<void> => {
+    const action = confirmationAction;
+    if (!action) return;
+
+    setConfirmationAction(undefined);
+    if (action === 'cancel') {
+      props.onBack();
+      return;
+    }
+
+    await save();
+  };
+
+  return <section className={`${styles.employeeProductivityApp} ${styles.dashboardPage} ${props.isDarkMode ? styles.dashboardDarkMode : ''}`}><div className={styles.dashboardMain}>
     <div className={styles.adminHeader}><Title1>Prompt Assistant</Title1><Caption1>Paste meeting notes or document text to prepare a reusable prompt. Your pasted text remains in this browser session unless you save the resulting prompt.</Caption1><div><Button appearance="secondary" onClick={props.onBack}>Back to Dashboard</Button></div></div>
     {(message || error) && <Card className={`${styles.emptyStateCard} ${error ? styles.adminErrorNotification : styles.adminSuccessNotification}`}><Body1>{error || message}</Body1></Card>}
     <div className={styles.promptAssistantLayout}>
@@ -362,15 +351,15 @@ export default function PromptAssistantPage(props: IPromptAssistantPageProps): R
         <Button appearance="primary" onClick={prepare}>Prepare Prompt</Button>
       </div></Card>
       <Card className={styles.sidePanelCard}><Title2>Review and save</Title2><div className={styles.formStack}>
-        <Field label="Prompt title" required validationMessage={hasValidationError('title') ? 'Prompt title is required.' : undefined} validationState={hasValidationError('title') ? 'error' : 'none'}><Input value={title} onChange={(_, data) => { setTitle(data.value); setValidationErrors((current) => current.filter((field) => field !== 'title')); }} /></Field>
-        <Field label="Category" required validationMessage={hasValidationError('category') ? 'Category is required.' : undefined} validationState={hasValidationError('category') ? 'error' : 'none'}><Dropdown placeholder="Select category" value={category} selectedOptions={category ? [category] : []} onOptionSelect={(_, data) => { setCategory(data.optionValue || ''); setValidationErrors((current) => current.filter((field) => field !== 'category')); setError(undefined); }}>{props.categories.map((item) => <Option key={item.id} value={item.title}>{item.title}</Option>)}</Dropdown></Field>
-        <Field label="Owner department" required validationMessage={hasValidationError('department') ? 'Owner department is required.' : undefined} validationState={hasValidationError('department') ? 'error' : 'none'}><Dropdown placeholder="Select department" value={department} selectedOptions={department ? [department] : []} onOptionSelect={(_, data) => { setDepartment(data.optionValue || ''); setValidationErrors((current) => current.filter((field) => field !== 'department')); }}>{props.departments.map((item) => <Option key={item.id} value={item.title}>{item.title}</Option>)}</Dropdown></Field>
-        <Field label="Tags" required validationMessage={hasValidationError('tags') ? 'Select at least one tag.' : undefined} validationState={hasValidationError('tags') ? 'error' : 'none'}><Dropdown multiselect placeholder="Select tags" selectedOptions={tags} onOptionSelect={(_, data) => { setTags(data.selectedOptions); setValidationErrors((current) => current.filter((field) => field !== 'tags')); }}>{props.tags.map((item) => <Option key={item.id} value={item.title}>{item.title}</Option>)}</Dropdown></Field>
-        <Field label="Prepared prompt" required validationMessage={hasValidationError('prompt') ? 'Prepare a prompt before saving.' : undefined} validationState={hasValidationError('prompt') ? 'error' : 'none'}><Textarea className={styles.assistantPromptText} value={prompt} readOnly resize="vertical" placeholder="Your prepared prompt will appear here." /></Field>
+        <Field label="Prompt title"><Input value={title} onChange={(_, data) => setTitle(data.value)} /></Field>
+        <Field label="Category"><Dropdown placeholder="Select category" value={category} selectedOptions={category ? [category] : []} onOptionSelect={(_, data) => { setCategory(data.optionValue || ''); setError(undefined); }}>{props.categories.map((item) => <Option key={item.id} value={item.title}>{item.title}</Option>)}</Dropdown></Field>
+        <Field label="Owner department"><Dropdown placeholder="Select department" value={department} selectedOptions={department ? [department] : []} onOptionSelect={(_, data) => setDepartment(data.optionValue || '')}>{props.departments.map((item) => <Option key={item.id} value={item.title}>{item.title}</Option>)}</Dropdown></Field>
+        <Field label="Tags"><Dropdown multiselect placeholder="Select tags" selectedOptions={tags} onOptionSelect={(_, data) => setTags(data.selectedOptions)}>{props.tags.map((item) => <Option key={item.id} value={item.title}>{item.title}</Option>)}</Dropdown></Field>
+        <Field label="Prepared prompt"><Textarea className={styles.assistantPromptText} value={prompt} readOnly resize="vertical" placeholder="Your prepared prompt will appear here." /></Field>
         {error && <Caption1 className={styles.assistantSaveError}>{error}</Caption1>}
-        <div className={styles.promptPreviewActions}><Button appearance="secondary" icon={<CopyRegular />} disabled={!prompt} onClick={() => void copyText(prompt).then(() => setMessage('Prepared prompt copied to your clipboard.')).catch((copyError: Error) => setError(copyError.message))}>Copy Prompt</Button><Button appearance="primary" disabled={saving} onClick={requestSave}>Save Draft</Button></div>
+        <div className={styles.promptPreviewActions}><Button appearance="secondary" icon={<CopyRegular />} disabled={!prompt} onClick={() => void copyText(prompt).then(() => setMessage('Prepared prompt copied to your clipboard.')).catch((copyError: Error) => setError(copyError.message))}>Copy Prompt</Button><Button appearance="primary" disabled={saving} onClick={requestSave}>Save Draft</Button><Button appearance="subtle" disabled={saving} onClick={requestCancel}>Cancel</Button></div>
       </div></Card>
     </div>
-    {isSaveConfirmationVisible && <div className={styles.promptPreviewOverlay} role="presentation" onMouseDown={() => setIsSaveConfirmationVisible(false)}><section className={styles.promptConfirmationDialog} role="dialog" aria-modal="true" aria-labelledby="save-draft-confirmation-title" onMouseDown={(event) => event.stopPropagation()}><Title2 id="save-draft-confirmation-title">Are you sure?</Title2><Body1>Do you want to save this prompt as a draft?</Body1><div className={styles.promptPreviewActions}><Button appearance="secondary" onClick={() => setIsSaveConfirmationVisible(false)}>No</Button><Button appearance="primary" disabled={saving} onClick={() => void save()}>Yes</Button></div></section></div>}
+    {confirmationAction && <div className={styles.promptPreviewOverlay} role="presentation" onMouseDown={() => setConfirmationAction(undefined)}><section className={styles.promptConfirmationDialog} role="dialog" aria-modal="true" aria-labelledby="assistant-confirmation-title" onMouseDown={(event) => event.stopPropagation()}><Title2 id="assistant-confirmation-title">Are you sure?</Title2><Body1>{confirmationAction === 'draft' ? 'Do you want to save this prompt as a draft?' : 'Do you want to cancel? Any unsaved changes will be lost.'}</Body1><div className={styles.promptPreviewActions}><Button appearance="secondary" onClick={() => setConfirmationAction(undefined)}>No</Button><Button appearance="primary" disabled={saving} onClick={() => void confirmAction()}>Yes</Button></div></section></div>}
   </div></section>;
 }

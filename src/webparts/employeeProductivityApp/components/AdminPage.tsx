@@ -15,6 +15,7 @@ export interface IAdminPageProps {
   onSearchDirectoryUsers: (searchText: string) => Promise<IDirectoryUser[]>;
   onDeletePrompt: (id: number) => Promise<void>;
   onBack: () => void;
+  isDarkMode: boolean;
 }
 
 export default function AdminPage(props: IAdminPageProps): React.ReactElement {
@@ -133,7 +134,7 @@ export default function AdminPage(props: IAdminPageProps): React.ReactElement {
   }
 
   return (
-    <section className={`${styles.employeeProductivityApp} ${styles.dashboardPage}`}>
+    <section className={`${styles.employeeProductivityApp} ${styles.dashboardPage} ${props.isDarkMode ? styles.dashboardDarkMode : ''}`}>
       <div className={styles.dashboardMain}>
         <div className={styles.adminHeader}>
           <Title1>Administration</Title1>
