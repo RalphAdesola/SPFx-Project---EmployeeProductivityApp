@@ -287,13 +287,20 @@ class SharePointService {
       .expand('User')
       .top(5000)();
 
-    return (items as ItemShape[])
-      .flatMap((item) => this.toPeople(item.User).map((adminUser) => ({
-        listItemId: item.Id,
-        userId: Number(adminUser.Id || item.UserId || 0),
-        title: adminUser.Title || adminUser.EMail || adminUser.Email || 'Administrator',
-        email: adminUser.EMail || adminUser.Email
-      })));
+    const admins: IAdminSummary[] = [];
+
+    (items as ItemShape[]).forEach((item: ItemShape) => {
+      this.toPeople(item.User).forEach((adminUser) => {
+        admins.push({
+          listItemId: item.Id,
+          userId: Number(adminUser.Id || item.UserId || 0),
+          title: adminUser.Title || adminUser.EMail || adminUser.Email || 'Administrator',
+          email: adminUser.EMail || adminUser.Email
+        });
+      });
+    });
+
+    return admins;
   }
 
   public async getCurrentUserId(): Promise<number> {

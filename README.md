@@ -1,7 +1,8 @@
 # employee-productivity-app
-
+//Rafa, to start it, i dey use npm run start and nvm use 22.14.0
 # About the App/What it does:
 A typical scenario would be:
+
 
 Sarah is a Sales Executive trying to convince ABC Company to purchase the company’s solution. She experiments with ChatGPT and develops a prompt that generates an excellent sales strategy and email sequence. She successfully closes the deal.
 

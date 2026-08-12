@@ -150,7 +150,7 @@ export default function AdminPage(props: IAdminPageProps): React.ReactElement {
         )}
 
         <div className={styles.dashboardLayout}>
-          <main className={styles.mainContent}>
+          <main className={`${styles.mainContent} ${styles.adminMainContent}`}>
             <Card className={styles.sidePanelCard}>
               <CardHeader header={<Body1 style={{ fontWeight: 600 }}>Users and Prompt Ownership</Body1>} description="Prompt totals are calculated from the Prompt Library." />
               <div className={styles.userOwnershipGrid}>

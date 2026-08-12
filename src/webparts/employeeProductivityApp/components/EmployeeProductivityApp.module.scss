@@ -15,14 +15,18 @@
 
 .landingPage {
   position: relative;
-  width: 100%;
+  width: 100vw;
   min-height: 100vh;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  overflow: hidden;
   background: #ffffff;
   color: #0f172a;
 }
 
 .landingCanvas {
   position: relative;
+  width: 100%;
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -40,12 +44,19 @@
   position: absolute;
   top: 18px;
   left: 32px;
-  right: 32px;
+  right: clamp(56px, 10vw, 176px);
   z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+@media (min-width: 1000px) {
+  .landingTopBar {
+    left: clamp(280px, 31vw, 500px);
+    right: clamp(250px, 26.5vw, 430px);
+  }
 }
 
 .landingTopLeftBrand {
@@ -60,7 +71,10 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.64) 0%, rgba(255, 255, 255, 0.52) 100%);
+  z-index: 0;
+  background:
+    linear-gradient(90deg, rgba(248, 251, 255, 0.88) 0%, rgba(248, 251, 255, 0.62) 48%, rgba(248, 251, 255, 0.48) 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.36) 100%);
 }
 
 .landingCanvas::after {
@@ -69,11 +83,12 @@
   inset: 0;
   background-image: url('../assets/LandingPage.png');
   background-repeat: no-repeat;
-  background-position: 74% center;
-  background-size: min(98vw, 1400px);
-  opacity: 0.22;
-  filter: grayscale(72%) contrast(104%) brightness(108%);
-  transform: scale(1.02);
+  z-index: 0;
+  background-position: center;
+  background-size: cover;
+  opacity: 0.32;
+  filter: grayscale(58%) contrast(106%) brightness(103%);
+  transform: scale(1.01);
 }
 
 .landingGlowLeft,
@@ -84,7 +99,7 @@
   border-radius: 50%;
   filter: blur(80px);
   opacity: 0.55;
-  z-index: 0;
+  z-index: 1;
 }
 
 .landingGlowLeft {
@@ -415,7 +430,14 @@
 
 .dashboardPage {
   display: flex;
-  min-height: 100vh;
+  width: calc(100vw - 64px);
+  min-height: calc(100vh - 16px);
+  margin-top: 8px;
+  margin-right: 32px;
+  margin-bottom: 8px;
+  margin-left: calc(50% - 50vw + 32px);
+  border-radius: 12px;
+  overflow: hidden;
   background: #f6f8fc;
   color: #111827;
 }
@@ -591,6 +613,21 @@
   padding: 24px;
 }
 
+.promptConfirmationDialog {
+  width: min(460px, calc(100vw - 48px));
+  padding: 28px;
+  border: 1px solid #dbe6f2;
+  border-radius: 24px;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
+}
+
+.promptConfirmationDialog :global(.fui-Body1) {
+  display: block;
+  margin-top: 12px;
+}
+
 .filterField {
   display: grid;
   gap: 8px;
@@ -635,6 +672,12 @@
 
 .mainContent {
   min-width: 0;
+}
+
+.adminMainContent {
+  display: grid;
+  gap: 20px;
+  align-content: start;
 }
 
 .summaryGrid {
@@ -724,6 +767,9 @@
 .assistantPromptText { width: 100%; }
 .assistantPromptText :global(textarea) { width: 100%; min-height: 280px; box-sizing: border-box; }
 .assistantFileInput { width: 100%; padding: 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: #ffffff; color: #0f172a; box-sizing: border-box; }
+.assistantFieldHint { display: block; margin-top: 4px; color: #b45309; }
+.assistantSaveError { display: block; color: #b91c1c; font-weight: 700; }
+.promptFormActionError { display: block; margin-top: 14px; color: #b91c1c; font-weight: 700; }
 
 @media (max-width: 900px) {
   .promptAssistantLayout { grid-template-columns: 1fr; }
@@ -1135,6 +1181,9 @@
 
 @media (max-width: 960px) {
   .dashboardPage {
+    width: calc(100vw - 32px);
+    margin-right: 16px;
+    margin-left: calc(50% - 50vw + 16px);
     flex-direction: column;
   }
 
@@ -1305,6 +1354,19 @@
 }
 
 :global {
+
+  #workbenchPageContent {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  #spLeftNav,
+  #spSiteHeader,
+  #spCommandBar,
+  #sp-appBar,
+  #CommentsWrapper {
+    display: none !important;
+  }
 
   .CanvasZone,
   .CanvasSection,

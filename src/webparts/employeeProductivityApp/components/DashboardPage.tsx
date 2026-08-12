@@ -148,6 +148,25 @@ const emptyPromptForm: IPromptWritePayload = {
   documentUrl: ''
 };
 
+type ConfirmationAction = 'publish' | 'draft' | 'cancel' | 'delete' | 'save-edit';
+type PromptFormField = 'title' | 'category' | 'aiModel' | 'description' | 'promptText' | 'tags' | 'department' | 'visibility';
+
+const promptFormFieldLabels: Record<PromptFormField, string> = {
+  title: 'Title',
+  category: 'Category',
+  aiModel: 'Recommended AI Tool',
+  description: 'Description',
+  promptText: 'Prompt Text',
+  tags: 'Tags',
+  department: 'Owner Department',
+  visibility: 'Visibility'
+};
+
+interface IConfirmationRequest {
+  action: ConfirmationAction;
+  promptId?: string;
+}
+
 export default function DashboardPage(props: IDashboardPageProps): React.ReactElement {
   const pageStyles = useStyles();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
@@ -160,6 +179,9 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
   const [selectedStatus, setSelectedStatus] = React.useState<'Published' | 'Draft' | undefined>(undefined);
   const [promptForm, setPromptForm] = React.useState<IPromptWritePayload>(emptyPromptForm);
   const [editingPromptId, setEditingPromptId] = React.useState<number | undefined>(undefined);
+  const [isPromptFormVisible, setIsPromptFormVisible] = React.useState(false);
+  const [confirmationRequest, setConfirmationRequest] = React.useState<IConfirmationRequest | undefined>(undefined);
+  const [validationErrors, setValidationErrors] = React.useState<PromptFormField[]>([]);
   const [selectedPrompt, setSelectedPrompt] = React.useState<IPromptDetails | null>(null);
   const [isSaving, setIsSaving] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
@@ -198,13 +220,25 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
 
   const updatePromptForm = <TKey extends keyof IPromptWritePayload,>(key: TKey, value: IPromptWritePayload[TKey]): void => {
     setPromptForm((current) => ({ ...current, [key]: value }));
+    setValidationErrors((current) => current.filter((field) => field !== (key as PromptFormField)));
   };
 
   const resetPromptForm = (): void => {
     setPromptForm(emptyPromptForm);
     setEditingPromptId(undefined);
+    setIsPromptFormVisible(false);
+    setActionError(null);
+    setValidationErrors([]);
+  };
+
+  const openNewPromptForm = (): void => {
+    setPromptForm(emptyPromptForm);
+    setEditingPromptId(undefined);
+    setSelectedPrompt(null);
     setActionError(null);
     setActionMessage(null);
+    setValidationErrors([]);
+    setIsPromptFormVisible(true);
   };
 
   const buildPayload = (status: 'Published' | 'Draft'): IPromptWritePayload => ({
@@ -212,6 +246,31 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
     status,
     tags: promptForm.tags.map((tag) => tag.trim()).filter(Boolean)
   });
+
+  const getMissingPromptFields = (): PromptFormField[] => {
+    const missing: PromptFormField[] = [];
+    if (!promptForm.title.trim()) missing.push('title');
+    if (!promptForm.category) missing.push('category');
+    if (!promptForm.aiModel) missing.push('aiModel');
+    if (!promptForm.description.trim()) missing.push('description');
+    if (!promptForm.promptText.trim()) missing.push('promptText');
+    if (!promptForm.tags.length) missing.push('tags');
+    if (!promptForm.department) missing.push('department');
+    if (!promptForm.visibility) missing.push('visibility');
+    return missing;
+  };
+
+  const validatePromptForm = (): boolean => {
+    const missingFields = getMissingPromptFields();
+    setValidationErrors(missingFields);
+    if (missingFields.length) {
+      setActionError(`Complete all required fields: ${missingFields.map((field) => promptFormFieldLabels[field]).join(', ')}.`);
+      return false;
+    }
+    return true;
+  };
+
+  const hasValidationError = (field: PromptFormField): boolean => validationErrors.indexOf(field) >= 0;
 
   const savePrompt = async (status: 'Published' | 'Draft'): Promise<void> => {
     setIsSaving(true);
@@ -221,8 +280,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
     try {
       const payload = buildPayload(status);
 
-      if (!payload.title.trim() || !payload.category || !payload.promptText.trim()) {
-        setActionError('Title, Category, and Prompt Text are required.');
+      if (!validatePromptForm()) {
         return;
       }
 
@@ -276,6 +334,9 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
       documentUrl: prompt.documentUrl || ''
     });
     setSelectedPrompt(null);
+    setValidationErrors([]);
+    setActionError(null);
+    setIsPromptFormVisible(true);
     setActionMessage('Editing latest SharePoint prompt record.');
   };
 
@@ -315,6 +376,47 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
       setActionMessage('Prompt deleted from active library.');
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to delete the prompt.');
+    }
+  };
+
+  const confirmationText = (action: ConfirmationAction): string => {
+    switch (action) {
+      case 'publish': return 'Are you sure you want to publish this prompt?';
+      case 'draft': return 'Are you sure you want to save this prompt as a draft?';
+      case 'cancel': return 'Are you sure you want to cancel? Any unsaved changes will be lost.';
+      case 'delete': return 'Are you sure you want to delete this prompt?';
+      case 'save-edit': return 'Are you sure you want to save these changes?';
+    }
+  };
+
+  const confirmAction = async (): Promise<void> => {
+    const request = confirmationRequest;
+    if (!request) return;
+    setConfirmationRequest(undefined);
+
+    if (request.action === 'cancel') {
+      resetPromptForm();
+      return;
+    }
+    if (request.action === 'delete' && request.promptId) {
+      await deletePrompt(request.promptId);
+      return;
+    }
+    if (request.action === 'publish') {
+      await savePrompt('Published');
+      return;
+    }
+    if (request.action === 'draft') {
+      await savePrompt('Draft');
+      return;
+    }
+    await savePrompt(promptForm.status);
+  };
+
+  const requestPromptSave = (action: 'publish' | 'draft' | 'save-edit'): void => {
+    setActionError(null);
+    if (validatePromptForm()) {
+      setConfirmationRequest({ action });
     }
   };
 
@@ -396,7 +498,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
             </div>
 
             <Avatar name={props.displayName} />
-            <Button appearance="primary" icon={<AddRegular />} onClick={resetPromptForm}>Add Prompt</Button>
+            <Button appearance="primary" icon={<AddRegular />} onClick={openNewPromptForm}>Add Prompt</Button>
           </div>
         </header>
 
@@ -574,7 +676,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                       <div className={styles.promptFooterActions}>
                         <Button appearance="secondary" icon={<CopyRegular />} onClick={() => copyPrompt(prompt.id)}>Copy Prompt</Button>
                         {isMyPromptsView && <Button appearance="secondary" onClick={() => editPrompt(prompt.id)}>Edit</Button>}
-                        {isMyPromptsView && <Button appearance="secondary" icon={<DeleteRegular />} onClick={() => deletePrompt(prompt.id)}>Delete</Button>}
+                        {isMyPromptsView && <Button appearance="secondary" icon={<DeleteRegular />} onClick={() => setConfirmationRequest({ action: 'delete', promptId: prompt.id })}>Delete</Button>}
                         <Button appearance="primary" icon={<EyeRegular />} onClick={() => viewPrompt(prompt.id)}>View Details</Button>
                       </div>
                     </div>
@@ -585,18 +687,18 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
           </main>
 
           <aside className={styles.rightPanel}>
-            <Card className={styles.sidePanelCard}>
+            {isPromptFormVisible && <Card className={styles.sidePanelCard}>
               <CardHeader
                 header={<Body1 style={{ fontWeight: 600 }}>{editingPromptId ? 'Edit Prompt' : 'Add Prompt'}</Body1>}
                 description="Save directly to the SharePoint Prompt Library"
               />
 
               <div className={styles.formStack}>
-                <Field label="Title">
+                <Field label="Title" required validationMessage={hasValidationError('title') ? 'Title is required.' : undefined} validationState={hasValidationError('title') ? 'error' : 'none'}>
                   <Input className={styles.whiteInput} value={promptForm.title} onChange={(_, data) => updatePromptForm('title', data.value)} placeholder="Enter prompt title" />
                 </Field>
 
-                <Field label="Category">
+                <Field label="Category" required validationMessage={hasValidationError('category') ? 'Category is required.' : undefined} validationState={hasValidationError('category') ? 'error' : 'none'}>
                   <Dropdown
                     className={styles.whiteDropdown}
                     placeholder="Select category"
@@ -610,7 +712,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                   </Dropdown>
                 </Field>
 
-                <Field label="Recommended AI Tool (optional)" hint="Suggest a tool when it is especially effective for this prompt.">
+                <Field label="Recommended AI Tool" required validationMessage={hasValidationError('aiModel') ? 'Recommended AI Tool is required.' : undefined} validationState={hasValidationError('aiModel') ? 'error' : 'none'}>
                   <Dropdown
                     className={styles.whiteDropdown}
                     placeholder="Select a recommended tool"
@@ -624,15 +726,15 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                   </Dropdown>
                 </Field>
 
-                <Field label="Description">
+                <Field label="Description" required validationMessage={hasValidationError('description') ? 'Description is required.' : undefined} validationState={hasValidationError('description') ? 'error' : 'none'}>
                   <Textarea className={styles.whiteTextarea} value={promptForm.description} onChange={(_, data) => updatePromptForm('description', data.value)} resize="vertical" placeholder="Brief prompt purpose and when to use it" />
                 </Field>
 
-                <Field label="Prompt Text">
+                <Field label="Prompt Text" required validationMessage={hasValidationError('promptText') ? 'Prompt Text is required.' : undefined} validationState={hasValidationError('promptText') ? 'error' : 'none'}>
                   <Textarea className={styles.whiteTextarea} value={promptForm.promptText} onChange={(_, data) => updatePromptForm('promptText', data.value)} resize="vertical" placeholder="Paste the actual prompt content here" />
                 </Field>
 
-                <Field label="Tags">
+                <Field label="Tags" required validationMessage={hasValidationError('tags') ? 'Select at least one tag.' : undefined} validationState={hasValidationError('tags') ? 'error' : 'none'}>
                   <Dropdown
                     className={styles.whiteDropdown}
                     multiselect
@@ -646,7 +748,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                   </Dropdown>
                 </Field>
 
-                <Field label="Owner Department">
+                <Field label="Owner Department" required validationMessage={hasValidationError('department') ? 'Owner Department is required.' : undefined} validationState={hasValidationError('department') ? 'error' : 'none'}>
                   <Dropdown
                     className={styles.whiteDropdown}
                     placeholder="Select owner department"
@@ -660,7 +762,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                   </Dropdown>
                 </Field>
 
-                <Field label="Visibility">
+                <Field label="Visibility" required validationMessage={hasValidationError('visibility') ? 'Visibility is required.' : undefined} validationState={hasValidationError('visibility') ? 'error' : 'none'}>
                   <Dropdown
                     className={styles.whiteDropdown}
                     placeholder="Select visibility"
@@ -684,14 +786,16 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
 
               <Divider />
 
+              {actionError && <Caption1 className={styles.promptFormActionError}>{actionError}</Caption1>}
+
               <div className={styles.formActions}>
-                <Button appearance="primary" icon={<CheckmarkCircleRegular />} disabled={isSaving} onClick={() => savePrompt(editingPromptId ? promptForm.status : 'Published')}>
+                <Button appearance="primary" icon={<CheckmarkCircleRegular />} disabled={isSaving} onClick={() => requestPromptSave(editingPromptId ? 'save-edit' : 'publish')}>
                   {editingPromptId ? 'Save Edit' : 'Publish'}
                 </Button>
-                {!editingPromptId && <Button appearance="secondary" disabled={isSaving} onClick={() => savePrompt('Draft')}>Save Draft</Button>}
-                <Button appearance="subtle" disabled={isSaving} onClick={resetPromptForm}>Cancel</Button>
+                {!editingPromptId && <Button appearance="secondary" disabled={isSaving} onClick={() => requestPromptSave('draft')}>Save Draft</Button>}
+                <Button appearance="subtle" disabled={isSaving} onClick={() => setConfirmationRequest({ action: 'cancel' })}>Cancel</Button>
               </div>
-            </Card>
+            </Card>}
 
             {selectedPrompt && (
               <div className={styles.promptPreviewOverlay} role="presentation" onMouseDown={() => setSelectedPrompt(null)}>
@@ -730,6 +834,19 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                   </div>
                   <div className={styles.promptPreviewActions}>
                     <Button appearance="secondary" onClick={() => copyPrompt(selectedPrompt.id)}>Copy Prompt</Button>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {confirmationRequest && (
+              <div className={styles.promptPreviewOverlay} role="presentation" onMouseDown={() => setConfirmationRequest(undefined)}>
+                <section className={styles.promptConfirmationDialog} role="dialog" aria-modal="true" aria-labelledby="confirmation-title" onMouseDown={(event) => event.stopPropagation()}>
+                  <Title2 id="confirmation-title">Are you sure?</Title2>
+                  <Body1>{confirmationText(confirmationRequest.action)}</Body1>
+                  <div className={styles.promptPreviewActions}>
+                    <Button appearance="secondary" onClick={() => setConfirmationRequest(undefined)}>No</Button>
+                    <Button appearance="primary" onClick={() => void confirmAction()}>Yes</Button>
                   </div>
                 </section>
               </div>
