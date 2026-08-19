@@ -34,6 +34,8 @@ import {
   SettingsRegular,
   CheckmarkCircleRegular,
   SignOutRegular,
+  StarFilled,
+  StarRegular,
   WeatherMoonRegular,
   WeatherSunnyRegular
 } from '@fluentui/react-icons';
@@ -46,6 +48,7 @@ import type {
   IPersonalPromptInsights,
   IPromptDetails,
   IPromptFilters,
+  IPromptRatingSummary,
   IPromptSummary,
   IPromptWritePayload,
   ITagSummary
@@ -60,6 +63,7 @@ export interface IDashboardPageProps {
   tags: ITagSummary[];
   prompts: IPromptSummary[];
   favoritePromptIds: number[];
+  promptRatingSummaries: IPromptRatingSummary[];
   myPrompts: IPromptSummary[];
   personalInsights: IPersonalPromptInsights;
   searchTerm: string;
@@ -75,6 +79,7 @@ export interface IDashboardPageProps {
   onDeletePrompt: (id: number) => Promise<void>;
   onCopyPrompt: (id: number) => Promise<string>;
   onSetPromptFavorite: (id: number, title: string, isFavorite: boolean) => Promise<void>;
+  onSubmitPromptRating: (id: number, rating: number) => Promise<void>;
   onNavigateToAdmin: () => void;
   onNavigateToPromptAssistant: () => void;
   initialNavItem?: string;
@@ -93,6 +98,7 @@ const navigationItems = [
 
 const visibilityOptions = ['Organization', 'Department', 'Private'];
 const statusOptions: Array<'Published' | 'Draft'> = ['Draft', 'Published'];
+const ratingOptions = [1, 2, 3, 4, 5] as const;
 const untitledDraftTitle = 'Untitled draft';
 const formatDate = (value: string): string => {
   const date = new Date(value);
@@ -104,6 +110,14 @@ const formatDate = (value: string): string => {
   const monthNumber = date.getMonth() + 1;
   const month = monthNumber < 10 ? `0${monthNumber}` : String(monthNumber);
   return `${day}-${month}-${date.getFullYear()}`;
+};
+
+const formatRatingSummary = (summary: IPromptRatingSummary | undefined): string => {
+  if (!summary) {
+    return 'Not rated yet';
+  }
+
+  return `${summary.averageRating.toFixed(1)} · ${summary.ratingCount} rating${summary.ratingCount === 1 ? '' : 's'}`;
 };
 
 const copyTextToClipboard = async (value: string): Promise<void> => {
@@ -183,6 +197,8 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
   const [isSaving, setIsSaving] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionMessage, setActionMessage] = React.useState<string | null>(null);
+  const [ratingError, setRatingError] = React.useState<string | undefined>(undefined);
+  const [isSubmittingRating, setIsSubmittingRating] = React.useState(false);
   const hasActiveFilters = Boolean(localSearch.trim() || selectedCategory || selectedModel || selectedDepartment || selectedTag || selectedStatus);
   const categoryOptions = props.categories.map((category) => category.title);
   const modelOptions = props.models.map((model) => model.title);
@@ -196,6 +212,8 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
   const displayedPrompts = isFavoritesView
     ? props.prompts.filter((prompt) => props.favoritePromptIds.indexOf(Number(prompt.id)) >= 0)
     : isMyPromptsView ? props.myPrompts : props.prompts;
+  const ratingSummaryByPromptId = React.useMemo(() => new Map(props.promptRatingSummaries.map((summary) => [summary.promptId, summary])), [props.promptRatingSummaries]);
+  const selectedPromptRatingSummary = selectedPrompt ? ratingSummaryByPromptId.get(Number(selectedPrompt.id)) : undefined;
 
   React.useEffect(() => {
     if (props.initialNavItem) {
@@ -303,6 +321,7 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
 
   const viewPrompt = async (promptId: string): Promise<void> => {
     setActionError(null);
+    setRatingError(undefined);
 
     try {
       const prompt = await props.onViewPrompt(Number(promptId));
@@ -441,6 +460,23 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
       setActionMessage(isFavorite ? 'Prompt removed from favorites.' : 'Prompt added to favorites.');
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to update favorites.');
+    }
+  };
+
+  const submitPromptRating = async (prompt: IPromptDetails, rating: number): Promise<void> => {
+    setRatingError(undefined);
+    setActionError(null);
+    setIsSubmittingRating(true);
+
+    try {
+      await props.onSubmitPromptRating(Number(prompt.id), rating);
+      setActionMessage('Your rating was saved. Thank you for your feedback.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save your rating.';
+      setRatingError(message);
+      setActionError(message);
+    } finally {
+      setIsSubmittingRating(false);
     }
   };
 
@@ -693,6 +729,13 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
 
                     <Body2 className={styles.promptDescription}>{prompt.description}</Body2>
 
+                    {prompt.status === 'Published' && (
+                      <div className={styles.promptRatingSummary}>
+                        <StarFilled aria-hidden="true" />
+                        <Caption1>{formatRatingSummary(ratingSummaryByPromptId.get(Number(prompt.id)))}</Caption1>
+                      </div>
+                    )}
+
                     <div className={styles.promptMetaGrid}>
                       <div className={styles.promptMetaItem}>
                         <Text>Owner Department: {prompt.department || 'Not specified'}</Text>
@@ -878,6 +921,41 @@ export default function DashboardPage(props: IDashboardPageProps): React.ReactEl
                       <Textarea className={`${styles.whiteTextarea} ${styles.promptPreviewTextarea}`} value={selectedPrompt.promptText} resize="vertical" readOnly />
                     </div>
                     {selectedPrompt.documentUrl && <Caption1>Sample asset: {selectedPrompt.documentUrl}</Caption1>}
+                    {selectedPrompt.status === 'Published' && (
+                      <div className={styles.promptRatingPanel}>
+                        <div>
+                          <Body2>Rate this prompt</Body2>
+                          <Caption1>
+                            {selectedPromptRatingSummary
+                              ? `${selectedPromptRatingSummary.averageRating.toFixed(1)} average from ${selectedPromptRatingSummary.ratingCount} rating${selectedPromptRatingSummary.ratingCount === 1 ? '' : 's'}`
+                              : 'Be the first to rate this prompt.'}
+                          </Caption1>
+                        </div>
+                        <div className={styles.ratingStarGroup} aria-label="Rate this prompt from one to five stars">
+                          {ratingOptions.map((rating) => {
+                            const isSelected = Boolean(selectedPromptRatingSummary && rating <= (selectedPromptRatingSummary.currentUserRating || 0));
+
+                            return (
+                              <Button
+                                key={rating}
+                                appearance="subtle"
+                                className={`${styles.ratingStarButton} ${isSelected ? styles.ratingStarButtonSelected : ''}`}
+                                icon={isSelected ? <StarFilled /> : <StarRegular />}
+                                aria-label={`Rate ${rating} out of 5 stars`}
+                                disabled={isSubmittingRating}
+                                onClick={() => void submitPromptRating(selectedPrompt, rating)}
+                              />
+                            );
+                          })}
+                        </div>
+                        <Caption1>
+                          {selectedPromptRatingSummary?.currentUserRating
+                            ? `Your rating: ${selectedPromptRatingSummary.currentUserRating} of 5. Select another star to update it.`
+                            : 'Select a star to submit your rating.'}
+                        </Caption1>
+                        {ratingError && <Caption1 className={styles.promptFormActionError}>{ratingError}</Caption1>}
+                      </div>
+                    )}
                   </div>
                   <div className={styles.promptPreviewActions}>
                     <Button appearance="secondary" onClick={() => copyPrompt(selectedPrompt.id)}>Copy Prompt</Button>

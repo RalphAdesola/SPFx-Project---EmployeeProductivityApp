@@ -5,6 +5,7 @@ import { SPFx } from '@pnp/sp/behaviors/spfx';
 import '@pnp/sp/webs';
 import '@pnp/sp/lists';
 import '@pnp/sp/items';
+import '@pnp/sp/fields';
 import '@pnp/sp/site-users/web';
 
 import type {
@@ -16,6 +17,7 @@ import type {
   IDepartmentSummary,
   IPromptDetails,
   IPromptFilters,
+  IPromptRatingSummary,
   IPromptSummary,
   ISeedReport,
   ITagSummary,
@@ -56,6 +58,7 @@ const LISTS = {
   tags: 'Tags',
   users: 'Users',
   admins: 'App Administrator',
+  ratings: 'Prompt Ratings',
   activities: 'Activity Log'
 } as const;
 
@@ -82,6 +85,7 @@ class SharePointService {
   private static instance: SharePointService | undefined;
   private sp: SPFI | undefined;
   private context: WebPartContext | undefined;
+  private readonly multiValueFieldCache = new Map<string, boolean>();
 
   public static initialize(context: WebPartContext): SharePointService {
     if (!SharePointService.instance) {
@@ -182,6 +186,44 @@ class SharePointService {
     return lookup?.Id ? [lookup.Id] : [];
   }
 
+  private getLookupId(value: unknown): number | undefined {
+    if (Array.isArray(value)) {
+      return this.getLookupId(value[0]);
+    }
+
+    if (value && typeof value === 'object' && Array.isArray((value as { results?: unknown[] }).results)) {
+      return this.getLookupId((value as { results: unknown[] }).results[0]);
+    }
+
+    if (typeof value === 'number' || typeof value === 'string') {
+      const id = Number(value);
+      return Number.isFinite(id) ? id : undefined;
+    }
+
+    const lookup = this.toLookup(value);
+    if (!lookup?.Id) {
+      return undefined;
+    }
+
+    return Number(lookup.Id);
+  }
+
+  private async fieldAllowsMultipleValues(listTitle: string, internalName: string): Promise<boolean> {
+    const cacheKey = `${listTitle}:${internalName}`;
+    const cachedValue = this.multiValueFieldCache.get(cacheKey);
+    if (cachedValue !== undefined) {
+      return cachedValue;
+    }
+
+    const fields = await this.web.lists.getByTitle(listTitle).fields
+      .select('InternalName,AllowMultipleValues')
+      .filter(`InternalName eq '${internalName.replace(/'/g, "''")}'`)();
+    const allowsMultipleValues = Boolean((fields as Array<{ AllowMultipleValues?: boolean }>)[0]?.AllowMultipleValues);
+
+    this.multiValueFieldCache.set(cacheKey, allowsMultipleValues);
+    return allowsMultipleValues;
+  }
+
   private mapPrompt(item: ItemShape): IPromptSummary {
     const status = this.toText(item.Status) === 'Draft' ? 'Draft' : 'Published';
     const category = this.toLookup(item.Category);
@@ -219,6 +261,11 @@ class SharePointService {
       modifiedDate: this.toText(item.Modified || item.Created),
       visibility: item.Visibility ? this.toText(item.Visibility) : undefined
     };
+  }
+
+  private isMissingListError(error: unknown, listTitle: string): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.indexOf(`List '${listTitle}' does not exist`) >= 0;
   }
 
   private mapCategory(item: ItemShape): ICategorySummary {
@@ -902,6 +949,111 @@ class SharePointService {
     });
 
     await this.logActivity('Prompt Copied', id, prompt.title, `Copied prompt "${prompt.title}".`);
+  }
+
+  public async getPromptRatingSummaries(): Promise<IPromptRatingSummary[]> {
+    const currentUser = await this.web.currentUser();
+    let items: ItemShape[];
+
+    try {
+      items = await this.web.lists.getByTitle(LISTS.ratings).items
+        .select('Id,PromptId,Prompt/Id,Rating,RaterId,Rater/Id,Modified')
+        .expand('Prompt,Rater')
+        .top(5000)() as ItemShape[];
+    } catch (error) {
+      if (this.isMissingListError(error, LISTS.ratings)) {
+        return [];
+      }
+
+      throw error;
+    }
+
+    const latestRatingsByUser = new Map<string, { promptId: number; rating: number; raterId: number; modified: number }>();
+
+    items.forEach((item) => {
+      const promptId = this.getLookupId(item.PromptId) || this.getLookupId(item.Prompt) || 0;
+      const raterId = this.getLookupId(item.RaterId) || this.getLookupId(item.Rater) || 0;
+      const rating = Number(item.Rating || 0);
+      const modified = new Date(this.toText(item.Modified)).getTime() || 0;
+
+      if (!promptId || !raterId || !Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return;
+      }
+
+      const key = `${promptId}:${raterId}`;
+      const existing = latestRatingsByUser.get(key);
+      if (!existing || modified >= existing.modified) {
+        latestRatingsByUser.set(key, { promptId, rating, raterId, modified });
+      }
+    });
+
+    const summaries = new Map<number, { total: number; count: number; currentUserRating?: number }>();
+    latestRatingsByUser.forEach((rating) => {
+      const summary = summaries.get(rating.promptId) || { total: 0, count: 0 };
+      summary.total += rating.rating;
+      summary.count += 1;
+      if (rating.raterId === Number(currentUser.Id)) {
+        summary.currentUserRating = rating.rating;
+      }
+      summaries.set(rating.promptId, summary);
+    });
+
+    return Array.from(summaries.entries()).map(([promptId, summary]) => ({
+      promptId,
+      averageRating: Math.round((summary.total / summary.count) * 10) / 10,
+      ratingCount: summary.count,
+      currentUserRating: summary.currentUserRating
+    }));
+  }
+
+  public async submitPromptRating(promptId: number, rating: number): Promise<void> {
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new Error('Select a rating from one to five stars.');
+    }
+
+    const currentUser = await this.web.currentUser();
+    const prompt = await this.getPromptById(promptId, false);
+    if (!prompt || prompt.status !== 'Published') {
+      throw new Error('Only published prompts can be rated.');
+    }
+
+    try {
+      const [promptAllowsMultipleValues, raterAllowsMultipleValues, existingRatings] = await Promise.all([
+        this.fieldAllowsMultipleValues(LISTS.ratings, 'Prompt'),
+        this.fieldAllowsMultipleValues(LISTS.ratings, 'Rater'),
+        this.web.lists.getByTitle(LISTS.ratings).items
+          .select('Id,PromptId,RaterId')
+          .top(5000)() as Promise<ItemShape[]>
+      ]);
+      const currentUserId = Number(currentUser.Id);
+      const existingRating = existingRatings.find((item) => (
+        this.getLookupId(item.PromptId) === promptId
+        && this.getLookupId(item.RaterId) === currentUserId
+      ));
+      const title = `Prompt ${promptId} rating`;
+
+      if (existingRating) {
+        await this.web.lists.getByTitle(LISTS.ratings).items.getById(existingRating.Id).update({
+          Title: title,
+          Rating: rating
+        });
+      } else {
+        await this.web.lists.getByTitle(LISTS.ratings).items.add({
+          Title: title,
+          PromptId: promptAllowsMultipleValues ? [promptId] : promptId,
+          Rating: rating,
+          RaterId: raterAllowsMultipleValues ? [currentUserId] : currentUserId
+        });
+      }
+    } catch (error) {
+      if (this.isMissingListError(error, LISTS.ratings)) {
+        throw new Error('Prompt Ratings is not configured. Create the Prompt Ratings SharePoint list before submitting ratings.');
+      }
+
+      throw error;
+    }
+
+    await this.logActivity('Rating Submitted', promptId, prompt.title, `Submitted a ${rating}-star rating for "${prompt.title}".`);
   }
 
   public async getCategories(): Promise<ICategorySummary[]> {

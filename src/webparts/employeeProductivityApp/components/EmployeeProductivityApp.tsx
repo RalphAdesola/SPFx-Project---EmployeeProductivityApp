@@ -10,6 +10,7 @@ import type {
   IPromptDetails,
   IPromptFilters,
   IPersonalPromptInsights,
+  IPromptRatingSummary,
   IPromptWritePayload,
   IPromptSummary,
   ITagSummary,
@@ -44,6 +45,7 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
   const [users, setUsers] = React.useState<IUserSummary[]>([]);
   const [admins, setAdmins] = React.useState<IAdminSummary[]>([]);
   const [favoritePromptIds, setFavoritePromptIds] = React.useState<number[]>([]);
+  const [promptRatingSummaries, setPromptRatingSummaries] = React.useState<IPromptRatingSummary[]>([]);
   const [currentUserId, setCurrentUserId] = React.useState<number | undefined>(undefined);
   const [isLoadingData, setIsLoadingData] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
@@ -65,12 +67,14 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
     setIsDarkMode((current) => !current);
   }, []);
   const loadPrompts = React.useCallback(async (filters?: IPromptFilters): Promise<void> => {
-    const [promptItems, favoriteIds] = await Promise.all([
+    const [promptItems, favoriteIds, ratingSummaries] = await Promise.all([
       service.getPrompts(filters),
-      service.getCurrentUserFavoritePromptIds()
+      service.getCurrentUserFavoritePromptIds(),
+      service.getPromptRatingSummaries()
     ]);
 
     setFavoritePromptIds(favoriteIds);
+    setPromptRatingSummaries(ratingSummaries);
 
     setPrompts(promptItems);
   }, [service]);
@@ -288,6 +292,11 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
       : current.filter((promptId) => promptId !== id));
   }, [service]);
 
+  const handleSubmitPromptRating = React.useCallback(async (id: number, rating: number): Promise<void> => {
+    await service.submitPromptRating(id, rating);
+    setPromptRatingSummaries(await service.getPromptRatingSummaries());
+  }, [service]);
+
   const myPrompts = React.useMemo(() => prompts.filter((prompt) => !prompt.isDeleted && prompt.createdById === currentUserId), [currentUserId, prompts]);
 
   const personalMetrics: IDashboardMetric[] = React.useMemo(() => {
@@ -348,6 +357,7 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
           tags={tags}
           prompts={prompts}
           favoritePromptIds={favoritePromptIds}
+          promptRatingSummaries={promptRatingSummaries}
           myPrompts={myPrompts}
           personalInsights={personalInsights}
           searchTerm={searchTerm}
@@ -363,6 +373,7 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
           onDeletePrompt={handleDeletePrompt}
           onCopyPrompt={handleCopyPrompt}
           onSetPromptFavorite={handleSetPromptFavorite}
+          onSubmitPromptRating={handleSubmitPromptRating}
           onNavigateToAdmin={() => setStage('admin')}
           onNavigateToPromptAssistant={() => setStage('prompt-assistant')}
           canAccessAdmin={canAccessAdmin}
@@ -403,6 +414,7 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
       tags={tags}
       prompts={prompts}
       favoritePromptIds={favoritePromptIds}
+      promptRatingSummaries={promptRatingSummaries}
       myPrompts={myPrompts}
       personalInsights={personalInsights}
       searchTerm={searchTerm}
@@ -418,6 +430,7 @@ export default function EmployeeProductivityApp(props: IEmployeeProductivityAppP
       onDeletePrompt={handleDeletePrompt}
       onCopyPrompt={handleCopyPrompt}
       onSetPromptFavorite={handleSetPromptFavorite}
+      onSubmitPromptRating={handleSubmitPromptRating}
       onNavigateToAdmin={() => setStage('admin')}
       onNavigateToPromptAssistant={() => setStage('prompt-assistant')}
       initialNavItem={dashboardNavItem}

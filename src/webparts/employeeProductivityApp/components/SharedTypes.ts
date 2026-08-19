@@ -86,6 +86,13 @@ export interface IPromptDetails extends IPromptSummary {
   visibility?: string;
 }
 
+export interface IPromptRatingSummary {
+  promptId: number;
+  averageRating: number;
+  ratingCount: number;
+  currentUserRating?: number;
+}
+
 export interface IPromptWritePayload {
   title: string;
   category: string;

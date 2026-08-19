@@ -956,6 +956,36 @@
   background: #f8fafc;
 }
 
+.promptRatingPanel {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #dbe6f2;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.ratingStarGroup {
+  display: flex;
+  gap: 2px;
+}
+
+.ratingStarButton {
+  min-width: 32px;
+  padding: 4px;
+  color: #94a3b8;
+}
+
+.ratingStarButton:hover,
+.ratingStarButtonSelected {
+  color: #d97706;
+}
+
+.dashboardDarkMode .promptRatingPanel {
+  background: #111827;
+  border-color: #334155;
+}
+
 @media (max-width: 640px) {
   .promptPreviewOverlay {
     padding: 12px;
@@ -1033,6 +1063,14 @@
 .promptDescription {
   margin-top: 12px;
   color: #1f2937;
+}
+
+.promptRatingSummary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 12px;
+  color: #b45309;
 }
 
 .promptMetaGrid {
